@@ -1,4 +1,4 @@
-# Spec `drishti-swing-v1` (DRAFT, frozen at the end of P0)
+# Spec `drishti-swing-v1` (FROZEN 2026-10-28, end of P0)
 
 **Sources:**
 - the "Drishti Trading Strategies Plan" PDF (2026-10-28), summarised in `second-module.md` §8;
@@ -36,6 +36,18 @@ Names that later delisted or were suspended stay in the history on the dates the
 - The user puts the NSE delisted and suspended lists in `/windows/drishti_data/manual/`.
 - P1 probes Upstox historical 1d for those names.
 - If Upstox has no history for them, **every backtest and every historical scorecard is labelled "SURVIVORSHIP-BIASED, EXPLORATORY"**, and the evidence rests on the forward test only.
+
+**Probe result (2026-10-28, `ops/p0/probe_delisted.py`; outputs in `/windows/drishti_data/cache/`):**
+
+| Set | Names | History | Upstox error |
+|---|---|---|---|
+| Removed from the master since 2026-09-23 | 27 | 2 (MORARJEE, BLUECHIP; still listed in some form) | 25 × `UDAPI100011 Invalid Instrument` |
+| NSE delisted since 2019-09 | 154 | 2 (SICAGEN, ARIHANT: only from 2026-04-20; re-listed / new ISIN) | 152 × `UDAPI100011 Invalid Instrument` |
+
+- Only 2 of the 154 delisted names are in Prajna's history.
+- The NSE list also excludes mergers and amalgamations.
+
+**Decision: Upstox does not serve history for delisted securities.** So **every backtest and historical scorecard in Drishti is "SURVIVORSHIP-BIASED, EXPLORATORY"**, and the evidence rests on the point-in-time forward test.
 
 ## 3. Indicators (all on adjusted daily bars)
 

@@ -1,6 +1,9 @@
-# Pre-registration: model #1 (swing), DRAFT
+# Pre-registration: model #1 (swing)
 
-**Status:** DRAFT. This document is committed and hashed at the freeze, before the forward start. Nothing in it changes after the freeze; a change means a new model version with a new forward window.
+**Status: TEXT FROZEN 2026-10-28 (end of P0).**
+- Frozen now: the hypotheses, the look rule, the test and the blinding.
+- **Filled at the P6 model freeze, before the forward start:** the data cut-off C, the model/feature/code sha, p* and the forward start date. They go into `FREEZE_M1.md`.
+- After this freeze, a change to the text means a new model version with a new forward window.
 
 ## Model
 
