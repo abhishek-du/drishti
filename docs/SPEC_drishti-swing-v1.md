@@ -135,18 +135,22 @@ A "bullish candle" (used by S1b) = engulfing_bull, or hammer, or (green with clo
 
   The trailing-20DMA and 10-session-hold variants are recorded as EXPLORATORY only.
 
-## 7. Costs (delivery, per side unless stated) *VERIFY against the user's Upstox contract note (buy + sell + DP) in `/windows/drishti_data/manual/` before the freeze*
+## 7. Costs (delivery)
 
-| Charge | Value |
-|---|---|
-| STT | 0.1 % buy + 0.1 % sell |
-| Stamp duty | 0.015 % buy |
-| NSE transaction | 0.00307 % each side |
-| SEBI fee | ₹10 per crore each side |
-| Brokerage | ₹20 per order *VERIFY (Upstox delivery)* |
-| GST | 18 % on brokerage + transaction + SEBI |
-| DP charge | ₹20 + GST per scrip per sell day *VERIFY* |
-| Slippage scenarios | 5 / 10 / 20 bps per side (base = 10) |
+Source: the user's sample contract note of 2026-10-28 (`/windows/drishti_data/manual/contract_note_sample_2026-10-28.txt`), plus the statutory rates. The sample has placeholders, so it shows the structure rather than a real trade. **The brokerage and DP figures are Upstox tariff assumptions until a real note is seen.** If a real note differs, that is a spec change (v2).
+
+| Charge | Buy | Sell |
+|---|---|---|
+| STT | 0.1 % | 0.1 % |
+| Stamp duty | 0.015 % | — |
+| NSE transaction | 0.00307 % | 0.00307 % |
+| SEBI fee | ₹10 per crore | ₹10 per crore |
+| Brokerage | ₹20 per executed order | ₹20 per executed order |
+| GST | 18 % on brokerage + transaction + SEBI (+ DP on the sell side) | same |
+| DP charge | — | ₹20 + 18 % GST = ₹23.60 per ISIN per sell day |
+
+- **Check figures (a unit test):** on ₹1,00,000 the buy pay-in is ₹1,00,142.34, the sell pay-out is ₹99,872.66, and the DP charge is ₹23.60. The round trip is ₹293.28 (0.293 %) before slippage.
+- **Slippage scenarios:** 5 / 10 / 20 bps per side; the base is 10.
 
 **Net R** = (exit − E) / R − costs_per_share / R.
 
