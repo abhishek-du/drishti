@@ -21,6 +21,16 @@ from drishti.core.db import prajna_sessionmaker, sessionmaker
 from drishti.data import eod_quotes, holidays, indices, manual
 
 
+async def trading_day(s, d: _dt.date) -> bool:
+    """Weekday and not an NSE holiday (latest holidays fetch)."""
+    from sqlalchemy import text
+    if d.weekday() >= 5:
+        return False
+    closed = (await s.execute(text("""select nse_closed from trading_holiday
+        where holiday_date = :d order by fetched_at desc limit 1"""), {"d": d})).scalar()
+    return not closed
+
+
 async def main(cmd: str, args: list[str]) -> dict:
     async with sessionmaker()() as s:
         rid = await runlog.start(s, f"P1_{cmd.upper()}", today(), {"args": args})
@@ -45,6 +55,9 @@ async def main(cmd: str, args: list[str]) -> dict:
                 t = now()
                 if t.hour * 60 + t.minute < 15 * 60 + 35:
                     raise SystemExit("REFUSED: eod quotes are taken after 15:35 IST")
+                if not await trading_day(s, t.date()):
+                    await runlog.end(s, rid, "NOOP", {"reason": "not a trading day"})
+                    return {"skipped": "not a trading day"}
                 async with prajna_sessionmaker()() as ps:
                     keys = await eod_quotes.universe_keys(ps)
                 rows = eod_quotes.fetch(Upstox(), keys)

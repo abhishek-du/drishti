@@ -1,0 +1,6 @@
+# Drishti cron (user installs: (crontab -l; cat /home/cis/windows/drishti/ops/cron.txt) | crontab - )
+# Upstox historical-candle API only 22:00-05:30 (shared account, decision A).
+40 15 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh eod
+15 22 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh indices
+30 7 * * 1     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh holidays
+0 20 * * *     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh manual
