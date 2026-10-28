@@ -31,6 +31,11 @@ On each session d, a stock is eligible when all of these hold:
 
 Names that later delisted or were suspended stay in the history on the dates they were eligible (fix 4). Survivorship status: see `DESIGN.md`, "Survivorship".
 
+**Survivorship rule (user P0 decision 2):**
+- The user puts the NSE delisted and suspended lists in `/windows/drishti_data/manual/`.
+- P1 probes Upstox historical 1d for those names.
+- If Upstox has no history for them, **every backtest and every historical scorecard is labelled "SURVIVORSHIP-BIASED, EXPLORATORY"**, and the evidence rests on the forward test only.
+
 ## 3. Indicators (all on adjusted daily bars)
 
 | Name | Definition |
@@ -129,7 +134,7 @@ A "bullish candle" (used by S1b) = engulfing_bull, or hammer, or (green with clo
 
   The trailing-20DMA and 10-session-hold variants are recorded as EXPLORATORY only.
 
-## 7. Costs (delivery, per side unless stated) *VERIFY against an Upstox contract note before the freeze*
+## 7. Costs (delivery, per side unless stated) *VERIFY against the user's Upstox contract note (buy + sell + DP) in `/windows/drishti_data/manual/` before the freeze*
 
 | Charge | Value |
 |---|---|

@@ -68,32 +68,28 @@ How it would work:
 | **Prajna data pipeline** | Daily 1m/15m/1h for all instruments, CA refresh, Stage 1–3 | Drishti's history would freeze at the stop date. Drishti would need its own ingest + CA adjustment before the MVP |
 | **Lab / Buy List / Desk / dashboard live** | Running | All stop being fed |
 
-**My recommendation was the shared token.** **User's provisional decision (2026-10-28): stop Prajna's Upstox jobs.** The final choice is confirmed at the end of P0, after the side-by-side (cost in days and lost tests). Until then nothing in Prajna changes. The plan below assumes "stop"; with "shared", P1b shrinks to index 1d + holidays, and the login/cron items go away.
+**FINAL DECISION (user, P0, 2026-10-28): A, the shared token.**
+- Prajna keeps its 06:30 login and all of its jobs. Drishti only reads `prajna/backend/var/upstox_token.json` and never logs in.
+- B (stopping Prajna's Upstox jobs) is rejected:
+  - results/news ingest also run on Upstox;
+  - 6–8 extra days of work;
+  - risk in the corporate-action adjustment;
+  - P1/P2/E6 would be lost.
+- See `P0_PRAJNA_DECISION.md`.
 
-### What follows from that decision
+### What follows (A)
 
-- **Drishti owns the daily TOTP login** through its own runbook. Its token cache is `drishti/backend/var/upstox_token.json` (0600). This needs the user's **written OK** for one automated login per day, like Prajna's 2026-09-24 permission. Approving this plan is that request.
-- **Prajna cron diff** (I prepare it, the user applies it):
-  - **Comment out every line that calls Upstox:** `daily.sh --login refresh|morning|weekly|monthly`, `preopen_day.sh --login`, `close_then_backfill.sh`, `ca_refresh.sh` (targeted, selfheal), `backfill_supervisor.sh` (tick/hourly/report), `stage1_checkpoint.sh`, `stage3_snapshot.sh` ×2, `model_predict.sh`, `e6_daily.sh`, `e51_data.sh`, `timing_monitor.sh` ×2, `global_refresh.sh` ×2 (checked in P0 for Upstox use), `maintenance.sh canon`.
-  - **The jobs that read the stopped data also go off:** `shadow_daily.sh`, `shadow_review.sh`, `paper_daily.sh`, `lab_daily.sh`, `lab_brief.sh`, `market_report.sh`, `signals_snapshot.sh`.
-  - **Kept:** `news_collect`/`news_reconcile`/`news_ai`, `fundamentals_events` (checked for Upstox in P0), `acceptance stage2`, `maintenance.sh status|all` (checked), `yahoo_research`, the dashboard.
-  - **The dashboard's live quote loop** calls Upstox. With no Prajna token it fails closed (probe invalid → no quotes). I check that it never tries a login.
-  - **Verification:** `crontab -l | grep -E -- '--login|close_then|preopen|backfill_supervisor'` finds nothing active, and no Prajna process calls Upstox for 1 session.
-- **Protocol-deviation notes** (committed in Prajna docs, which is allowed): P1, P2, E5 and E6 end at the stop date "by user decision 2026-10-28: Upstox moved to Drishti". No look is taken, and the specs are unchanged. Memory is updated.
-- **Prajna's stored history stays** and is read by Drishti read-only up to the stop date (adjusted 1d 2019+, 15m/1h 2022+, 1m 2026-07+, CA, results, calendar). **From the stop date on, Drishti ingests itself** (P1b):
-  - 1d bars for its universe (Upstox historical V3) every evening;
-  - corporate actions (Upstox, as Prajna's `ca_refresh` does) + its own split/bonus adjustment factors, tested against Prajna's `canon` adjusted bars on the overlap period;
-  - index 1d (Nifty 50/500, Bank, sectors, India VIX);
-  - the holidays API;
-  - news comes from Prajna's still-running news collector (read-only).
-- **WebSocket:** both connections are Drishti's, from 09:00 to 15:35 (no 09:20 gap).
-- **Rate limits:** the whole budget is Drishti's, with its own client at fraction ≤ 0.8.
+- **Token:** Drishti's `token_reader` opens the file read-only and probes `/v2/user/profile`. If the token is invalid, Drishti stops with an alert and **never** calls the login endpoints (tested).
+- **Rate limits:** Drishti uses the quote API after 15:35 (separate budget). It uses the historical-candle API only 22:00–05:30 at fraction ≤ 0.5, under a shared lock file with Prajna's backfill supervisor.
+- **WebSocket:** Prajna's pre-open recorder keeps both connections 08:55–09:20. Drishti ticks (OFF until the disk is enlarged) would start at 09:20; this is decided again before intraday model #2.
+- **Data:** Drishti reads Prajna's adjusted 1d/15m/1h/1m bars, CA factors, calendar, results and news read-only (role `drishti_ro`). Drishti ingests only what Prajna lacks: the Nifty 500 and sector indices (1d), and the Upstox holidays API.
+- **Prajna** is unchanged: no cron diff and no protocol-deviation notes.
 
 ## Architecture (MVP)
 
 ```
-Prajna DB (read-only role drishti_ro): history up to the stop date (adjusted bars, CA, results, calendar) + live news(+AI)
-Upstox (Drishti's own login): EOD quotes 15:40, 1d bars + CA nightly, holidays, indices 1d, WS ticks 09:00–15:35
+Prajna DB (read-only role drishti_ro): adjusted bars, CA, results, calendar, news(+AI), kept current by Prajna
+Upstox (shared token, read-only): EOD quotes 15:40, holidays, indices 1d (Nifty 500 + sectors); WS ticks from 09:20 (OFF until the disk grows)
 User CSV: drishti_data/manual/asm_gsm_*.csv
         │
  Scout (EOD 19:30) → Chart Reader (daily) → Strategist S1a/S1b/S2/S3 → Predictor (model #1)
@@ -107,7 +103,7 @@ User CSV: drishti_data/manual/asm_gsm_*.csv
 - **Daily bar of day T:**
   - Drishti makes a provisional bar from the 15:40 Upstox quote OHLC.
   - Signals and paper decisions for T+1 are made at 19:30 from the provisional bar.
-  - Drishti's own 1d fetch for T runs in the night/next morning (Upstox historical) and is compared. Any OHLC difference > 0.1 % is flagged, and that day is re-graded.
+  - Prajna's official 1d bar for T lands at T+1 07:00 and is compared. Any OHLC difference > 0.1 % is flagged, and that day is re-graded.
 - **Paper fills (swing):**
   - buy-stop / limit at T+1, filled from T+1's daily bar (open gap rule: if it opens beyond the trigger, fill at the open);
   - when the stop and target both fall inside one bar, assume the stop first (conservative);
@@ -215,9 +211,8 @@ web/ (Next.js + lightweight-charts)   ops/ (runbooks + systemd user units)   doc
 
 | Phase | Deliverable | Est. |
 |---|---|---|
-| **P0** | Frozen specs: `drishti-swing-v1` rules, costs, label = exits, features, CV, PIT universe; PREREG_M1 draft (H1–H3, ≥ 100 events, bootstrap CI); survivorship probe. **Before P0 ends: a side-by-side for the user of stopping Prajna vs the shared token (days of extra work, tests lost, risks), and the user confirms the final choice.** Only then the Prajna cron diff + protocol-deviation notes. Repo skeleton | 1–2 d |
-| **P1a** | DB `drishti` + `drishti_ro` (after backup), Drishti login runbook + token cache, holidays, EOD quotes, ASM/GSM CSV loader | 2 d |
-| **P1b** | Own ingest from the stop date: nightly 1d bars, CA + adjustment factors (checked against Prajna canon on the overlap), index 1d (Nifty 50/500, Bank, sectors, VIX); delisted-name backfill if the probe succeeds. Tick recorder code is ready but **OFF** until the disk is enlarged | 4–5 d |
+| **P0** | Frozen specs + PREREG_M1; survivorship probe; token decision = **A (shared)** | 1–2 d |
+| **P1** | DB `drishti` + `drishti_ro` (after backup), read-only token reader, holidays API, EOD quotes, Nifty 500/sector index 1d, ASM/GSM + delisted CSV loaders, survivorship probe/backfill, contract-note cost check. Tick recorder code ready but **OFF** until the disk is enlarged | 3–4 d |
 | **P2** | Scout (screener B, 100–300 names), watchlist log, FastAPI, Next.js daily chart + overlays (S/R, EMAs, candle flags, signals) | 4–5 d |
 | **P3** | Candle flags, S/R zones, trend, breakout/retest state; S1a/S1b/S2/S3; daily replay/backtest 2019→cut-off with costs; scorecards (a)/(b) vs placebo, all EXPLORATORY | 5–6 d |
 | **P4** | Labels, purged/embargoed CV, LightGBM + calibration, registry; predictions logged + auto-graded | 4–5 d |
@@ -251,10 +246,8 @@ web/ (Next.js + lightweight-charts)   ops/ (runbooks + systemd user units)   doc
 
 ## Needed from the user
 
-1. **A written OK for Drishti's one automated Upstox TOTP login per day** (approving this plan counts).
-2. Apply the Prajna cron diff (prepared in P0) **on the day Drishti's login goes live**, so no day is left without data.
-3. Enlarge the disk for 60-day ticks.
-4. The ASM/GSM CSV in `drishti_data/manual/` (format noted in P1a).
-5. Install the systemd user units (prepared in P1).
-6. Mask suspend.
-7. A new Bedrock key (optional, for the Narrator).
+1. Files in `/windows/drishti_data/manual/`: the NSE delisted + suspended lists, the ASM/GSM list, and one Upstox delivery contract note (buy + sell + DP).
+2. Enlarge the disk for 60-day ticks (intraday phase).
+3. Install the systemd user units (prepared in P1).
+4. Mask suspend.
+5. A new Bedrock key (optional, for the Narrator).

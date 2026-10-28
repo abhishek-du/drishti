@@ -31,14 +31,19 @@
 
 **Every other number is EXPLORATORY** and labelled so: set (a), per strategy, per regime, other slippage levels, the trailing-exit variant, the placebo comparison.
 
-## Look rule (fix 3)
+## Look rule (user P0 decision 5)
 
 - **Forward start:** the first session after the freeze commit.
-- **The single look happens when both are true:**
+- **The single look happens when all three are true:**
   - ≥ 40 forward sessions;
-  - ≥ 100 closed (b) events (TP/SL/TIME).
-- If 100 is not reached at 40 sessions, the look waits until it is. The only number checked before the look is the closed-event count.
-- **Open question (to settle before the freeze):** H1 uses only the *confirmed* subset, which may be much smaller than 100. Proposal: also require ≥ 30 closed confirmed events, otherwise H1/H2 are reported "UNDERPOWERED" (not a pass).
+  - ≥ 100 closed (b) events (TP/SL/TIME);
+  - ≥ 30 closed **confirmed** events.
+- **Hard cap: 120 forward sessions.**
+  - If the cap comes first, the look happens at session 120.
+  - H1/H2 are then reported as **UNDERPOWERED** when the confirmed count < 30, which is not a pass.
+  - H3 is evaluated as usual if (b) ≥ 100. Otherwise it is UNDERPOWERED too.
+- Still exactly **one look**.
+- **Before the look, only these counts may be checked:** sessions, closed (b) events, closed confirmed events.
 
 ## Test (fix 3)
 
@@ -46,16 +51,21 @@
 - **Bonferroni** over 3 hypotheses: two-sided 98.33 % CIs. "95 %" in the user's fix is the family-wise level.
 - **Comparisons shown with the look** (EXPLORATORY): a random-entry placebo (same names and days, random trigger) and the rules-only book.
 
-## Open question: daily visibility (to settle before the freeze)
+## Blinding (user P0 decision 4)
 
-For Prajna's Strategy Lab (2026-10-27), the user chose to see daily P&L, with "no rule change because of the daily numbers". For Drishti, two options:
-- **(i) blind:** counts and health only until the look. This is the strongest test.
-- **(ii) visible:** paper P&L and grades shown daily, the look report states "outcomes visible daily", and no rule or threshold changes inside the window.
-
-The user decides. This draft assumes (i).
+- **Blind on outcomes until the look:**
+  - no P&L, hit rate, expectancy, Brier score or win/loss count is shown or computed in any report, dashboard or Telegram message;
+  - neither for model #1's forward window nor for its paper book.
+- **What is allowed: an ops-health view only:**
+  - data freshness (last bar date, provisional vs official status, token valid, last run status);
+  - signal count per strategy per day;
+  - order counts (placed / filled / cancelled with reason);
+  - open position count;
+  - errors.
+- The grading job writes grades to the DB, but every read path that would expose outcomes refuses until the look ledger says LOOK_TAKEN (enforced in code and tested).
 
 ## Not allowed
 
-- No look at forward outcomes before the look rule is met. The daily dashboard shows counts and health only for the model #1 forward test.
+- No look at forward outcomes before the look rule is met (see Blinding).
 - No retrain of the champion inside the forward window. Weekly challengers train only on data ≤ C plus their own shadow period, and never replace the champion before its look.
 - No change to `drishti-swing-v1` or `f1` inside the window.

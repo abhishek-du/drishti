@@ -1,9 +1,18 @@
 # P0 decision: stop Prajna's Upstox jobs, or share the token?
 
-**Status:** waiting for the user's final choice.
+**Status: DECIDED, 2026-10-28 (user, P0).**
 
-- Provisional choice (2026-10-28): stop Prajna's Upstox jobs. Recommended: share the token.
-- **Until the user confirms, nothing in Prajna changes.**
+**A (shared token) is chosen.**
+- Prajna keeps its 06:30 login and all of its jobs.
+- Drishti only reads the token file.
+
+**B (stopping Prajna's Upstox jobs) is rejected.** The reasons:
+- results/news ingest (`fundamentals_events.sh`, `news_poll.sh`) also run on Upstox;
+- 6–8 extra days of Drishti work before the MVP;
+- the risk of corporate-action adjustment errors;
+- it would lose P1, P2 and E6.
+
+The cron diff below is **not applied** and is kept only as a record.
 
 All facts below were checked read-only on 2026-10-28.
 
@@ -32,7 +41,7 @@ All facts below were checked read-only on 2026-10-28.
 
 Under B, a protocol-deviation note is added to each of P1/P2/E5/E6: "forward window ended on the stop date by user decision 2026-10-28; Upstox moved to Drishti". No look is taken, and the specs are unchanged.
 
-## Cron diff for B (prepared only; the user applies it on the day Drishti's login goes live)
+## Cron diff for B (REJECTED, not applied; kept as a record)
 
 **Lines to comment out.** They call Upstox (checked by reading each runbook):
 - `daily.sh --login` (refresh 06:30, morning 07:00, weekly, monthly)
@@ -62,6 +71,7 @@ Under B, a protocol-deviation note is added to each of P1/P2/E5/E6: "forward win
 
 **Check after applying:** `crontab -l | grep -vE '^\s*#' | grep -E -- '--login|close_then|preopen|backfill_supervisor|ca_refresh|fundamentals_events|news_poll|global_refresh'` prints nothing. Then, for one session, confirm that no Prajna process calls Upstox.
 
-## Question for the user
+## Outcome
 
-Confirm **A (shared token)** or **B (stop)**. Under A, the whole "Cron diff for B" section is dropped, and Drishti's P1b shrinks to index 1d + holidays.
+- **A chosen.** The "Cron diff for B" section is a record only, and nothing in Prajna changes.
+- **Drishti P1 ingests only:** the Nifty 500 and sector indices (1d), and the holidays API.
