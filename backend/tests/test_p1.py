@@ -110,3 +110,29 @@ def test_append_only_in_test_db():
                     await c.execute(text(sql), {"r": rid})
         await engine().dispose()
     asyncio.run(go())
+
+
+def test_surveillance_freshness_in_test_db():
+    from sqlalchemy import text
+
+    from drishti.core import migrate
+    from drishti.core.db import engine, sessionmaker
+
+    async def go():
+        await migrate.main(False)
+        rid = uuid.uuid4()
+        async with sessionmaker()() as s:
+            await s.execute(text("insert into run(run_id, kind, code_sha) values (:r,'TEST','x')"),
+                            {"r": rid})
+            await s.execute(text("""insert into manual_file(run_id, kind, path, file_date, sha256,
+                row_count) values (:r, 'ASM', 'x', '2031-01-01', :h, 1)"""),
+                {"r": rid, "h": uuid.uuid4().hex * 2})
+            await s.commit()
+            f = await manual.surveillance_freshness(s, _dt.date(2031, 1, 5))
+            assert f["ASM"]["status"] == "OK" and f["ASM"]["age_days"] == 4
+            f = await manual.surveillance_freshness(s, _dt.date(2031, 1, 9))
+            assert f["ASM"]["status"] == "STALE" and f["warning"]
+            f = await manual.surveillance_freshness(s, _dt.date(2030, 12, 31))   # PIT: not yet known
+            assert f["ASM"]["status"] in ("MISSING", "STALE")
+        await engine().dispose()
+    asyncio.run(go())

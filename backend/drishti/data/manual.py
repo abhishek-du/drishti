@@ -140,3 +140,26 @@ async def load_dir(s, rid, folder: Path) -> list[dict]:
         await s.commit()
         done.append({"file": p.name, "kind": k, "rows": len(rows), "status": "LOADED"})
     return done
+
+
+STALE_DAYS = 7          # user 2026-10-28: warn when the newest ASM/GSM file is older than 7 days
+
+
+async def surveillance_freshness(s, on: _dt.date) -> dict:
+    """The newest ASM and GSM file dates as of `on` (point in time: file_date <= on), their age
+    in calendar days, and STALE when older than STALE_DAYS or missing. Scout records this dict in
+    every watchlist run and logs a warning (Telegram from P5) when anything is stale. A warning
+    only: it does not change the trading rules."""
+    import logging
+    out: dict = {}
+    for k in ("ASM", "GSM"):
+        d = (await s.execute(text("""select max(file_date) from manual_file
+            where kind = :k and file_date <= :on"""), {"k": k, "on": on})).scalar()
+        age = (on - d).days if d else None
+        out[k] = {"file_date": d, "age_days": age,
+                  "status": "MISSING" if d is None else "STALE" if age > STALE_DAYS else "OK"}
+    out["warning"] = any(v["status"] != "OK" for v in (out["ASM"], out["GSM"]))
+    if out["warning"]:
+        logging.getLogger("drishti.surveillance").warning(
+            "ASM/GSM list not fresh: %s", {k: out[k] for k in ("ASM", "GSM")})
+    return out
