@@ -28,6 +28,7 @@ On each session d, a stock is eligible when all of these hold:
 | Price | close(d) ≥ ₹50 |
 | Rank | Top 500 by that 20-session traded value, computed on d (the "Nifty 500 proxy") |
 | Surveillance | Not in the latest ASM/GSM CSV with file date ≤ d (`drishti_data/manual/`). A CSV older than 7 sessions raises the warning `ASM_STALE` |
+| Surveillance in the backtest | The ASM/GSM files are **current lists only**: first files `asm_2026-10-28.csv` with 189 rows (LTASM I–IV, STASM I–II) and `gsm_2026-10-28.csv` with 76 rows (GSM 0–VI, IBC, ESM). There is no history, so **backtests cannot apply this rule point-in-time**. The backtest therefore uses only the price/liquidity rules above, and the ASM/GSM exclusion applies from each file's date in the forward test and paper trading. Each new download is kept under its date (`asm_YYYY-MM-DD.csv`) to build a history |
 
 Names that later delisted or were suspended stay in the history on the dates they were eligible (fix 4). Survivorship status: see `DESIGN.md`, "Survivorship".
 
