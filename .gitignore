@@ -1,0 +1,11 @@
+.env
+*.env
+backend/var/
+backend/.venv/
+__pycache__/
+*.pyc
+web/node_modules/
+web/.next/
+drishti_data/
+*.parquet
+*.zst
