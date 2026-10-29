@@ -311,8 +311,9 @@ All files are in `/windows/prajna_archive/irreplaceable_20261029/` (mode 0600). 
 | `prajna_basis_20261029.dump` | 25.0 MB | ohlcv_payload_basis 604,127; ohlcv_observation 34,224 |
 | `prajna_news_20261029.dump` | 31.9 MB | 16 tables: news_item 46,126 … news_article 1,049, news_instrument 2,826, news_ai_enrichment 12,272, results_event 131,841 |
 | `prajna_preopen_20261029.dump` | 825.2 MB | preopen_tick 8,512,199; preopen_book 42,559,455; preopen_session_status 396; instrument_universe_membership 78,199 |
-| **Total** | **≈ 0.88 GB** | n/a |
+| `prajna_raw_payloads_20261029.tar.zst` | 4,015.1 MB | Raw vendor payload files `prajna/backend/var/archive`: 792,166 files, 4.13 GB before compression. The payloads are already gzip, so zstd gains little. `zstd -t` OK (user Q5, 2026-10-29) |
+| **Total** | **≈ 4.9 GB** | n/a |
 
 **Caveat on the row counts:** they were taken right after each dump, not inside its snapshot, so news rows added in between may differ by a few. **The final archive on the switch night is made with Prajna frozen**, and it is test-restored into a scratch database, whose counts are compared with the source exactly. Both archives are then copied to the second location the user provides, and the sha256 is checked there.
 
-The raw vendor payload files (`prajna/backend/var/archive`, 6.1 GB, including the CA endpoint responses) are not in this archive. **Open question for the user:** should they be included in the final archive?
+The raw vendor payload files are in the archive too (row above). **User decision (Q5):** they are included in every archive, and the final archive on the switch night re-makes this file.
