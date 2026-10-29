@@ -106,7 +106,7 @@ Only `spec_gate` will ever gate a signal.
 
 Delivery % stays out: there is no source.
 
-## SC6 (PROPOSED 2026-10-29, the user decides before the P6 freeze): `BAND_VETO`
+## SC6 (ADOPTED: user, 2026-10-29, as a clarification, not v2): `BAND_VETO`
 
 **Check (2026-10-29).** Circuit limits come from the live Upstox quote. History has no source for them, so this is one date only; the daily count builds up from the 15:40 snapshot, and it is the Scout funnel's `eligible − band_ok`. The spec section 2 universe was built on the 10-28 bars:
 
@@ -130,4 +130,27 @@ So about 0.4 % of the universe: small, but not zero. A 2 % or 5 % band name can 
 
 **If the user prefers v2:** it would be bundled with whatever the pre-P6 power check decides (`DESIGN.md`), so that there is only one version change before the freeze.
 
-**Status: NOT ADOPTED.** No code, no rule. The decision is recorded in `FREEZE_M1.md` at P6.
+**Status: ADOPTED (user, 2026-10-29), exactly as proposed above:**
+- `BAND_VETO` for a 2 % or 5 % band on T;
+- `BAND_UNKNOWN` is logged and not vetoed;
+- both are counted separately in the forward report.
+
+It is a clarification, not v2. It is built in P5 (Risk Manager) and listed in `FREEZE_M1.md` at P6.
+
+### SC6a (user, 2026-10-29): T+1 band test in the SC3 08:45 recheck, only if the data exists
+
+**Rule:**
+- If the circuit limits of T+1 are known before the 09:15 open, the 08:45 recheck applies the same band test to the pending order. A 2 % or 5 % band on T+1 cancels it with `BAND_VETO_T1`.
+- This is cancel-only. The recheck never creates or enlarges an order.
+- An unknown T+1 band changes nothing.
+
+**Data check (2026-10-29):**
+- Prajna's pre-open data has no circuit limits: `canon_preopen` and the V3 feed parser carry iep/ieq/tbq/tsq/ltp only.
+- The only possible source is the Upstox full quote (REST) at 08:45.
+- Whether that quote already shows the **new** day's limits before the open is **UNVERIFIED**. `ops/probes/probe_t1_band.py` checks this, read only, between 08:40 and 09:10 on 2026-10-30:
+  - the limits have changed from T's 15:40 limits;
+  - and they are centred on T's close rather than T−1's.
+
+**Status: PENDING the probe.**
+- If the verdict is "AVAILABLE", SC6a is built in P5 together with SC3.
+- If not, SC6a is **skipped**, noted here, and the T-day band test (SC6) is the only band rule.
