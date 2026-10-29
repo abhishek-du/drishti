@@ -252,6 +252,22 @@ web/ (Next.js + lightweight-charts)   ops/ (runbooks + systemd user units)   doc
 4. Mask suspend.
 5. A new Bedrock key (optional, for the Narrator).
 
+## Option B (user, 2026-10-29): new phase P1c before P3
+
+Prajna stops, and Drishti owns Upstox; see `SWITCH_TO_B.md`. P1c covers:
+- Drishti's TOTP login;
+- the instrument master;
+- the nightly official 1d;
+- corporate actions + factor derivation + vendor-applied detection, checked against Prajna on a ≥ 5-session overlap;
+- the results calendar and news per D2;
+- a one-time copy of Prajna's history (D1);
+- re-pointing every Drishti read away from Prajna's live DB;
+- the switch itself.
+
+**Estimate:** ≈ 8–10 working days. P3 onward shift by that much.
+
+The proposed switch is Friday 2026-11-13, after Prajna's close job. P1/P2/E5/E6 end on the switch day with protocol-deviation notes and no look.
+
 ## Pre-P6 power check (user, 2026-10-29)
 
 The P3 replay (2019 → cut-off, official bars, SURVIVORSHIP-BIASED, EXPLORATORY) must report the following **before P6**:

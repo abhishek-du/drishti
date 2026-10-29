@@ -1,8 +1,18 @@
 # P0 decision: stop Prajna's Upstox jobs, or share the token?
 
-**Status: DECIDED, 2026-10-28 (user, P0).**
+**Status: FINAL = B (user, 2026-10-29).**
+- Prajna is stopped fully. Drishti gets the whole Upstox budget and both WebSocket connections.
+- The same message gave the written OK for one automated Drishti TOTP login per day (token cache 0600, gitignored).
+- The inventory is in `PRAJNA_INVENTORY.md`, and the switch plan, cron diff and verification are in `SWITCH_TO_B.md`.
+- **Nothing in Prajna changes until the user approves `SWITCH_TO_B.md`.** Until the switch day, decision A's rules still apply: Drishti does not log in, and uses the historical API only 22:00–05:30.
 
-**A (shared token) is chosen.**
+The cron diff below (from 2026-10-28) is superseded by `SWITCH_TO_B.md` 6.1, which covers every Prajna line.
+
+---
+
+*Earlier decision, kept as a record:*
+
+**2026-10-28: A (shared token) was chosen.**
 - Prajna keeps its 06:30 login and all of its jobs.
 - Drishti only reads the token file.
 
