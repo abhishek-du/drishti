@@ -136,3 +136,90 @@ def test_surveillance_freshness_in_test_db():
             assert f["ASM"]["status"] in ("MISSING", "STALE")
         await engine().dispose()
     asyncio.run(go())
+
+
+def test_short_special_sessions_are_not_sessions():
+    from drishti.core.clock import IST
+    t = lambda d, h, m: _dt.datetime(*d, h, m, tzinfo=IST)  # noqa: E731
+    muhurat = {"holiday_type": "SPECIAL_TIMING", "nse_closed": False,
+               "nse_open_from": t((2026, 11, 8), 14, 20), "nse_open_to": t((2026, 11, 8), 15, 30)}
+    budget = {"holiday_type": "SPECIAL_TIMING", "nse_closed": False,
+              "nse_open_from": t((2026, 2, 1), 9, 15), "nse_open_to": t((2026, 2, 1), 15, 30)}
+    settle = {"holiday_type": "SETTLEMENT_HOLIDAY", "nse_closed": False,
+              "nse_open_from": t((2026, 3, 19), 9, 15), "nse_open_to": t((2026, 3, 19), 15, 30)}
+    closed = {"holiday_type": "TRADING_HOLIDAY", "nse_closed": True}
+    assert not holidays.is_session(_dt.date(2026, 11, 8), muhurat)         # Sunday, 70 min
+    weekday_muhurat = dict(muhurat, nse_open_from=t((2026, 11, 9), 18, 0),
+                           nse_open_to=t((2026, 11, 9), 19, 0))
+    assert not holidays.is_session(_dt.date(2026, 11, 9), weekday_muhurat)  # a Monday, 1 hour
+    assert not holidays.is_session(_dt.date(2025, 10, 21), None)           # history list
+    assert holidays.is_session(_dt.date(2026, 2, 1), budget)               # full Sunday session
+    assert holidays.is_session(_dt.date(2026, 3, 19), settle)
+    assert not holidays.is_session(_dt.date(2026, 12, 25), closed)
+    assert holidays.is_session(_dt.date(2026, 10, 29), None)
+    assert not holidays.is_session(_dt.date(2026, 10, 31), None)           # Saturday
+
+
+def test_eod_skips_a_day_without_trades_in_test_db():
+    """Unannounced holiday: every quote's last trade is from an earlier day -> nothing stored,
+    run NOOP SKIPPED_NO_SESSION. A normal day stores only the quotes that traded that day."""
+    from sqlalchemy import text
+
+    from drishti.core import migrate, runlog
+    from drishti.core.clock import IST
+    from drishti.core.db import engine, sessionmaker
+    from drishti.run import p1
+
+    day = _dt.date(2031, 3, 4)
+    q = lambda k, d: {"instrument_key": k, "open": 1, "high": 2, "low": 0.5, "close": 1.5,  # noqa
+                      "last_price": 1.5, "volume": 9,
+                      "quote_ts": _dt.datetime(*d, 15, 29, tzinfo=IST)}
+
+    async def go():
+        await migrate.main(False)
+        async with sessionmaker()() as s:
+            rid = await runlog.start(s, "P1_EOD", day)
+            out = await p1.eod(s, rid, day, ["A", "B"], [q("A", (2031, 3, 3)), q("B", (2031, 3, 3))])
+            assert out["skipped"] == "SKIPPED_NO_SESSION" and "stored" not in out
+            st = (await s.execute(text("select status, counts->>'skipped' from run_end "
+                                       "where run_id = :r"), {"r": rid})).one()
+            assert tuple(st) == ("NOOP", "SKIPPED_NO_SESSION")
+            n = (await s.execute(text("select count(*) from eod_quote where run_id = :r"),
+                                 {"r": rid})).scalar()
+            assert n == 0
+
+            rid = await runlog.start(s, "P1_EOD", day)
+            rows = [q(k, (2031, 3, 4)) for k in "ABC"] + [q("D", (2031, 3, 3))]
+            out = await p1.eod(s, rid, day, list("ABCD"), rows)
+            assert out["stored"] == 3 and out["stale"] == 1
+            keys = (await s.execute(text("select instrument_key from eod_quote where run_id = :r "
+                                         "order by 1"), {"r": rid})).scalars().all()
+            assert keys == ["A", "B", "C"]
+        await engine().dispose()
+    asyncio.run(go())
+
+
+def test_bar_check_counts_revisions_and_crossings():
+    import numpy as np
+    import pandas as pd
+
+    from drishti.data import bar_check
+    day = _dt.date(2031, 1, 1)
+    n = 260
+    dates = [day - _dt.timedelta(days=n - i) for i in range(n)]
+    c = 100 + np.sin(np.arange(n) / 9) * 5
+    hist = pd.concat([pd.DataFrame({"instrument_key": k, "session_date": dates, "open": c,
+                                    "high": c + 1, "low": c - 1, "close": c, "volume": 1e7})
+                      for k in ("A", "B")])
+    ema = pd.Series(np.r_[c, c[-1]]).ewm(span=20, adjust=False).mean().iloc[-1]
+    x = ema * 0.99                                # B's official close sits on the S2 boundary
+    prov = pd.DataFrame({"open": [c[-1]] * 2, "high": [c[-1] + 2] * 2, "low": [c[-1] - 2] * 2,
+                         "close": [c[-1], x * 1.003], "last_price": [c[-1], x * 1.003],
+                         "volume": [1e7] * 2}, index=["A", "B"])
+    off = prov.copy()
+    off.loc["B", "close"] = x * 0.997
+    r = bar_check.compare(prov, off, hist, day, {"A", "B"})
+    assert r["revised"] == 1 and r["revised_by_field"]["close"] == 1
+    assert r["eligible_revised_crossed_boundary"] == 1
+    assert "S2_ema_close" in r["detail"][0]["crossed"]
+    assert r["revised_level_move_ge_0.1atr"] == 0           # high / low unchanged

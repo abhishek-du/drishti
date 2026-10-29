@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Drishti job wrapper for cron: one job at a time per name, a log line at start and end.
-#   ops/runbooks/drishti_job.sh holidays|indices|manual|eod
+#   ops/runbooks/drishti_job.sh holidays|indices|manual|eod|barcheck
 # PAPER ONLY. Read-only market data. Drishti never logs in to Upstox (decision A).
 set -uo pipefail
 JOB="${1:?job}"

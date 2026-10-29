@@ -11,7 +11,13 @@ import datetime as _dt
 
 from sqlalchemy import text
 
+from drishti.core.clock import IST
+
 BATCH = 500                     # Upstox quote API: at most 500 keys a request
+# Unannounced-holiday guard: below this share of quotes with a last trade today (IST) the day is
+# taken as no session (SKIPPED_NO_SESSION) and nothing is stored. A normal day is ~95 %
+# (2026-10-28: 3,416 of 3,576; the rest did not trade that day).
+MIN_FRESH_SHARE = 0.5
 
 
 async def universe_keys(ps) -> list[str]:
@@ -33,6 +39,21 @@ def parse(data: dict) -> list[dict]:
                     "quote_ts": _dt.datetime.fromtimestamp(int(ts) / 1000, tz=_dt.timezone.utc)
                     if ts and str(ts).isdigit() else None})
     return [r for r in out if r["instrument_key"]]
+
+
+def split_fresh(rows: list[dict], day: _dt.date) -> tuple[list[dict], list[dict]]:
+    """(rows whose last trade is on `day` in IST, the rest). Only the first become provisional
+    bars of `day`: a quote with an older last trade is a previous session's bar."""
+    fresh, stale = [], []
+    for r in rows:
+        ts = r["quote_ts"]
+        (fresh if ts is not None and ts.astimezone(IST).date() == day else stale).append(r)
+    return fresh, stale
+
+
+def session_seen(fresh: list[dict], stale: list[dict]) -> bool:
+    n = len(fresh) + len(stale)
+    return n > 0 and len(fresh) / n >= MIN_FRESH_SHARE
 
 
 def fetch(api, keys: list[str]) -> list[dict]:

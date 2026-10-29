@@ -4,6 +4,7 @@
     .venv/bin/python -m drishti.run.p1 indices [--from 2019-01-01]
     .venv/bin/python -m drishti.run.p1 manual
     .venv/bin/python -m drishti.run.p1 eod            # after 15:35 IST on a trading day
+    .venv/bin/python -m drishti.run.p1 barcheck [--date 2026-10-28]   # T+1 after 09:00
 """
 
 from __future__ import annotations
@@ -15,20 +16,58 @@ import sys
 
 from drishti.broker.upstox.rest import Upstox
 from drishti.core import runlog
-from drishti.core.clock import now, today
-from drishti.core.config import get_settings
+from drishti.core.clock import IST, now, today
+from drishti.core.config import BACKEND, get_settings
 from drishti.core.db import prajna_sessionmaker, sessionmaker
-from drishti.data import eod_quotes, holidays, indices, manual
+from drishti.data import bar_check, eod_quotes, holidays, indices, manual
 
 
 async def trading_day(s, d: _dt.date) -> bool:
-    """Weekday and not an NSE holiday (latest holidays fetch)."""
+    """A regular NSE session (latest holidays fetch; short special sessions excluded, SC1)."""
+    return holidays.is_session(d, await holidays.latest(s, d))
+
+
+async def eod(s, rid, day: _dt.date, keys: list[str], rows: list[dict]) -> dict:
+    """Store the provisional bars of `day`: only quotes whose last trade is on `day`, and none at
+    all when too few are (an unannounced holiday or a dead feed: SKIPPED_NO_SESSION)."""
+    fresh, stale = eod_quotes.split_fresh(rows, day)
+    ts = [r["quote_ts"] for r in rows if r["quote_ts"] is not None]
+    out = {"keys": len(keys), "quotes": len(rows), "fresh": len(fresh), "stale": len(stale),
+           "latest_trade": max(ts).astimezone(IST).isoformat() if ts else None}
+    if not eod_quotes.session_seen(fresh, stale):
+        out["skipped"] = "SKIPPED_NO_SESSION"
+        await runlog.end(s, rid, "NOOP", out)
+        return out
+    out["stored"] = await eod_quotes.store(s, rid, day, fresh)
+    await runlog.end(s, rid, "OK", out)
+    return out
+
+
+async def barcheck(s, args: list[str]) -> dict:
+    """Provisional vs official bar of T (default: the latest EOD session before today). The
+    full report goes to var/reports/bar_check_<T>.json; the run row keeps the counts."""
     from sqlalchemy import text
-    if d.weekday() >= 5:
-        return False
-    closed = (await s.execute(text("""select nse_closed from trading_holiday
-        where holiday_date = :d order by fetched_at desc limit 1"""), {"d": d})).scalar()
-    return not closed
+    if "--date" in args:
+        day = _dt.date.fromisoformat(args[args.index("--date") + 1])
+    else:
+        day = (await s.execute(text("""select max(r.session_date) from run r
+            join run_end e using (run_id) where r.kind = 'P1_EOD' and e.status = 'OK'
+            and r.session_date < :t"""), {"t": today()})).scalar()
+    if day is None:
+        return {"skipped": "no provisional session"}
+    prov = await bar_check.provisional(s, day)
+    if prov.empty:
+        return {"session": str(day), "skipped": "no provisional bars"}
+    async with prajna_sessionmaker()() as ps:
+        hist = await bar_check.official_history(ps, day, list(prov.index))
+    off = hist[hist.session_date == day].set_index("instrument_key")
+    if off.empty:
+        raise RuntimeError(f"official 1d bars of {day} not in Prajna yet")
+    rep = bar_check.compare(prov, off, hist, day, bar_check.eligible_proxy(hist, off, day))
+    path = BACKEND / "var" / "reports" / f"bar_check_{day}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rep, indent=1, default=str))
+    return {k: v for k, v in rep.items() if k != "detail"} | {"report": str(path)}
 
 
 async def main(cmd: str, args: list[str]) -> dict:
@@ -60,8 +99,9 @@ async def main(cmd: str, args: list[str]) -> dict:
                     return {"skipped": "not a trading day"}
                 async with prajna_sessionmaker()() as ps:
                     keys = await eod_quotes.universe_keys(ps)
-                rows = eod_quotes.fetch(Upstox(), keys)
-                out = {"keys": len(keys), "stored": await eod_quotes.store(s, rid, today(), rows)}
+                return await eod(s, rid, t.date(), keys, eod_quotes.fetch(Upstox(), keys))
+            elif cmd == "barcheck":
+                out = await barcheck(s, args)
             else:
                 raise SystemExit(__doc__)
         except BaseException as e:

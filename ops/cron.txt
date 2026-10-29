@@ -4,3 +4,5 @@
 15 22 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh indices
 30 7 * * 1     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh holidays
 0 20 * * *     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh manual
+# provisional vs official bar of the previous session (Prajna's 1d fetch ends ~08:30); first 5 sessions at least
+30 9 * * 2-6   /home/cis/windows/drishti/ops/runbooks/drishti_job.sh barcheck
