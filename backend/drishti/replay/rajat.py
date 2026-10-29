@@ -399,10 +399,10 @@ async def run(tf: str, rd: Path, window: str, only: set | None, jobs: int) -> di
     el = panel[panel.eligible]
     if tf == "daily":
         elig = set(zip(el.instrument_key, el.session_date))
-        ever = set(el.instrument_key)
-        groups = [(k, g, tf, elig, start, t_hi, set()) for k, g in
+        mine = el.groupby("instrument_key").session_date.apply(set).to_dict()
+        groups = [(k, g, tf, {(k, d) for d in mine[k]}, start, t_hi, set()) for k, g in
                   daily.sort_values(["instrument_key", "session_date"]).groupby("instrument_key")
-                  if k in ever]
+                  if k in mine]
     else:
         prev = {d: cal[i - 1] for i, d in enumerate(cal) if i}
         by_day = el.groupby("session_date").instrument_key.apply(set).to_dict()
@@ -418,7 +418,13 @@ async def run(tf: str, rd: Path, window: str, only: set | None, jobs: int) -> di
                 cache.parent.mkdir(parents=True, exist_ok=True)
                 b15.to_parquet(cache, index=False)
             guard = await ca_guard(ps, cal, start, end)
-        groups = [(k, g, tf, elig, start, end, {x for x in guard if x[0] == k})
+        mine: dict = {}
+        for k, d in elig:
+            mine.setdefault(k, set()).add((k, d))
+        gk: dict = {}
+        for k, d in guard:
+            gk.setdefault(k, set()).add((k, d))
+        groups = [(k, g, tf, mine.get(k, set()), start, end, gk.get(k, set()))
                   for k, g in b15.groupby("instrument_key")]
     if only:
         global VARIANTS
