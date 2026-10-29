@@ -282,6 +282,51 @@ web/ (Next.js + lightweight-charts)   ops/ (runbooks + systemd user units)   doc
 - A research sprint, the user's call on scope, ends in either a documented v2 (its own spec, pre-registration and freeze) or no forward test.
 - The forward-start date below is void until then.
 
+## Research sprint result (user, 2026-10-29): no v2 frozen, forward test stays ON HOLD
+
+**The sprint** is Track B's, merged as code at `7aaa614`. Its outputs stay as files in `/windows/drishti_data/research/track-b/sprint/`, and the variant log `VARIANTS.md` was written before each run. All of it is **SURVIVORSHIP-BIASED, EXPLORATORY**.
+- Development window: 2019-09 → 2024-12-31.
+- Holdout: 2025-01-01 → C (2026-10-21), touched once by the single finalist.
+- Base slippage 10 bps/side.
+
+**Outcome:**
+- **No candidate's entry beat random entry.** Every rule result is compared with a seeded placebo that uses the same exits and holding period.
+- **No v2 is frozen. The forward test stays ON HOLD.**
+
+**Step 1: v1 diagnosis.** Same v1 entries, only the exit changes (V01–V05: time-out 5/10/20/60, trailing SMA20). The rules are at or below placebo in every variant: net R @10 bps rules / placebo:
+
+| Variant | Rules | Placebo |
+|---|---|---|
+| V01 | −0.072 | −0.054 |
+| V02 | −0.073 | −0.040 |
+| V03 | −0.056 | −0.030 |
+| V04 | −0.021 | +0.009 |
+| V05 | −0.056 | −0.027 |
+
+Longer holds help both sides equally, so the difference comes from the exits and the market, not from the entry.
+
+**Step 2: candidates.** The user approved them, and each was logged before its run.
+
+| Candidate | What | Development result | Finalist? |
+|---|---|---|---|
+| C1a–C1c | Monthly momentum book | Fails the finalist rule (excess vs Nifty 500 price + equal-weight PIT benchmarks) | no |
+| C2a | S1a + trailing SMA20 | rules −0.050 vs placebo +0.167 R | no |
+| C2b | S1a + trailing SMA50 | rules +0.324 vs placebo +0.465 R | no |
+| C3a | PEAD, 20 sessions | rules +0.217 vs placebo +0.206 R (+0.012) | no |
+| **C3b** | **PEAD, 60 sessions** | rules +0.650 vs placebo +0.537 R (**+0.113**), net > 0 in 4/5 years | **the only finalist** |
+
+**Step 3: holdout. C3b failed.** Rules +0.065 R vs placebo +0.267 R, a margin of **−0.202 R** (2025: +0.016 vs +0.147; 2026: +0.128 vs +0.422). The development edge did not carry over.
+
+**Consequences:**
+- `drishti-swing-v1` stays frozen and is not taken forward.
+- There is no v2 spec, pre-registration or freeze. P6 and the forward start stay ON HOLD.
+- Unchanged and still running:
+  - P1c and the 2026-11-20 switch;
+  - the live view and ticks;
+  - the chart UI;
+  - Scout (context only).
+- Any next research round needs a new written scope from the user, and it uses fresh variants within a new budget. **The holdout window 2025-01-01 → 2026-10-21 has now been used once**, so a later candidate needs a new untouched window (for example the forward data), not this one again.
+
 ## Option B (user, 2026-10-29): new phase P1c before P3
 
 Prajna stops, and Drishti owns Upstox; see `SWITCH_TO_B.md`. P1c covers:
@@ -310,7 +355,7 @@ The user's decisions D1–D6 are in `SWITCH_TO_B.md`: copy plus an archive, no N
 | P3 | **done early (draft, Track B, 2026-10-29)** | Features, strategies, replay, scorecards, power check: no edge, flag set (STATUS above) |
 | P4 | **done early (draft, Track B, 2026-10-29)** | Labels, purged CV, LightGBM, calibration: AUC ~0.50 |
 | P5 | 12-08 → 12-11 | Risk Manager (incl. SC6 BAND_VETO), paper trader, SC3 recheck, Narrator, Telegram |
-| P6 | **ON HOLD** | No freeze of v1; waits for the research sprint / v2 decision |
+| P6 | **ON HOLD** | No freeze: v1 not taken forward; research sprint 2026-10-29 froze no v2 (C3b failed its holdout) |
 | **Forward test start** | **ON HOLD (was Thu 2026-12-17)**: v1 is not taken forward | Earliest look ≥ 40 sessions ≈ mid-Feb 2027; 120-session cap ≈ early June 2027 (2027 holidays to confirm) |
 
 The forward-start date also depends on the pre-P6 power check. If the projection under the current regime is beyond 120 sessions, the user decides between "start as frozen" and a documented v2 before the freeze.
