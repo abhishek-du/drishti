@@ -5,6 +5,10 @@ set -uo pipefail
 cd "$(dirname "$0")/../../backend"
 mkdir -p var/logs var/run
 up() { [ -f "var/run/$1.pid" ] && kill -0 "$(cat "var/run/$1.pid")" 2>/dev/null; }
+if systemctl --user is-active --quiet drishti-api.service 2>/dev/null; then
+  echo "systemd units are installed and active: use systemctl --user {restart|stop|status} drishti-api drishti-web"
+  exit 2
+fi
 case "${1:?start|stop|status}" in
   start)
     up api || { nohup .venv/bin/uvicorn drishti.api.app:app --host 127.0.0.1 --port 8700 \

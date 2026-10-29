@@ -8,17 +8,26 @@ is served before the look; /api/health is the ops view (freshness, counts, error
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
+import json
+from pathlib import Path
+from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 
 from drishti.core.clock import today
+from drishti.core.config import BACKEND
 from drishti.core.db import prajna_sessionmaker, sessionmaker
 from drishti.data import bars, manual
 from drishti.features import candles, indicators, levels
+
+LIVE_DIR = Path("/dev/shm/drishti_live")
+LIVE_HEALTH = BACKEND / "var" / "run" / "live_health.json"
+LIVE_LABEL = "LIVE VIEW - not used by drishti-swing-v1"
 
 app = FastAPI(title="Drishti", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
@@ -50,7 +59,12 @@ async def health() -> dict:
     async with prajna_sessionmaker()() as ps:
         off = (await ps.execute(text("""select max(session_date) from ohlcv_bar
             where timeframe = '1d' and session_date > current_date - 10"""))).scalar()
-    return {"today": str(today()), "runs": [dict(r) for r in runs], "failures_7d": [dict(f) for f in fails],
+    live = None
+    try:
+        live = json.loads(LIVE_HEALTH.read_text())
+    except (OSError, ValueError):
+        pass
+    return {"live": live, "today": str(today()), "runs": [dict(r) for r in runs], "failures_7d": [dict(f) for f in fails],
             "freshness": {**dict(fresh), "prajna_official_1d": off}, "surveillance": surv,
             "watchlist_sizes": [{"session": str(d), "listed": n} for d, n in wl]}
 
@@ -132,3 +146,56 @@ async def chart(key: str, days: int = Query(500, ge=60, le=2000)) -> dict:
         "last": {"atr": _f(atr), "rsi": _f(ind.rsi.iloc[-1]), "atr_pct": _f(ind.atr_pct.iloc[-1])},
         "watchlist_dates": wl, "signals": [],
     }
+
+
+def _live_summary() -> dict:
+    try:
+        return json.loads((LIVE_DIR / "summary.json").read_text())
+    except (OSError, ValueError):
+        return {"label": LIVE_LABEL, "updated_at": None, "keys": {}}
+
+
+def _live_candles(key: str, tf: int) -> list[dict]:
+    try:
+        c1 = json.loads((LIVE_DIR / "c1m" / f"{quote(key, safe='')}.json").read_text())
+    except (OSError, ValueError):
+        return []
+    if tf == 1:
+        return c1
+    out: dict[int, dict] = {}
+    for b in c1:
+        t = b["time"] // (tf * 60) * tf * 60
+        x = out.get(t)
+        if x is None:
+            out[t] = dict(b, time=t)
+        else:
+            x.update(high=max(x["high"], b["high"]), low=min(x["low"], b["low"]),
+                     close=b["close"], volume=x["volume"] + b["volume"], vwap=b["vwap"])
+    return [out[t] for t in sorted(out)]
+
+
+@app.get("/api/live/summary")
+async def live_summary() -> dict:
+    return _live_summary()
+
+
+@app.get("/api/live/candles")
+async def live_candles(key: str, tf: int = Query(1, ge=1, le=5)) -> dict:
+    return {"label": LIVE_LABEL, "key": key, "tf": tf, "candles": _live_candles(key, tf)}
+
+
+@app.websocket("/api/live/ws")
+async def live_ws(ws: WebSocket, key: str | None = None, tf: int = 1):
+    """Push the live summary (and the candles of `key`) once a second while the client is
+    connected. Read only; nothing is accepted from the client."""
+    await ws.accept()
+    tf = 5 if tf == 5 else 1
+    try:
+        while True:
+            msg = {"label": LIVE_LABEL, "summary": _live_summary()}
+            if key:
+                msg["candles"] = _live_candles(key, tf)
+            await ws.send_text(json.dumps(msg, separators=(",", ":")))
+            await asyncio.sleep(1.0)
+    except (WebSocketDisconnect, RuntimeError):
+        return

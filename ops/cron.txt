@@ -14,3 +14,6 @@
 40 22 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh daily1d
 # Shadow continuity: Drishti 1d vs Prajna 1d of the latest session (Prajna's 07:00 fetch ends ~08:30)
 35 9 * * 2-6   /home/cis/windows/drishti/ops/runbooks/drishti_job.sh compare1d
+# Live recorder (LIVE VIEW + ticks; not used by drishti-swing-v1): every 5 min in market hours,
+# skipped silently while running or outside 09:21-15:35 (09:15 after the switch)
+*/5 9-15 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh live

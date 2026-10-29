@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { fmt, get, stockHref } from "@/components/api";
+import { LIVE_LABEL, LiveMsg, openLive, stale } from "@/components/live";
 
 type Row = {
   instrument_key: string; symbol: string | null; event: string; rank: number; rs_score: number;
@@ -19,6 +20,8 @@ export default function Watchlist() {
   const [date, setDate] = useState<string>("");
   const [wl, setWl] = useState<WL | null>(null);
   const [err, setErr] = useState("");
+  const [live, setLive] = useState<LiveMsg | null>(null);
+  useEffect(() => openLive(setLive), []);
   useEffect(() => { get<string[]>("/api/watchlist/dates").then((d) => { setDates(d); setDate(d[0] ?? ""); }).catch((e) => setErr(String(e))); }, []);
   useEffect(() => { if (date) get<WL>(`/api/watchlist?date=${date}`).then(setWl).catch((e) => setErr(String(e))); }, [date]);
   if (err) return <p className="muted">{err}</p>;
@@ -45,13 +48,15 @@ export default function Watchlist() {
         <div className="card muted">{FUNNEL.map((k) => `${k.replace(/_/g, " ")} ${c[k] ?? "–"}`).join(" → ")}</div>
         <div className="card">added {c.added} · kept {c.kept} · dropped {c.dropped} · results ahead {c.results_ahead}</div>
       </div>
-      <p className="muted" style={{ marginTop: 0 }}>A watchlist is context, not a signal. Outcomes are hidden until the look (blind rule).</p>
+      <p className="muted" style={{ marginTop: 0 }}>A watchlist is context, not a signal. Outcomes are hidden until the look (blind rule).
+        {" "}<span className={`pill ${stale(live?.summary.updated_at) ? "" : "on"}`}>{LIVE_LABEL}: {stale(live?.summary.updated_at) ? "not running" : "live"}</span></p>
       <div className="scroll">
         <table>
           <thead><tr>
             <th className="num">#</th><th>Symbol</th><th>Event</th><th className="num">RS</th><th className="num">Close</th>
             <th className="num">ATR %</th><th className="num">From 52w high</th><th className="num">RSI</th>
             <th className="num">Vol/50d</th><th>Candle (T)</th><th>Results</th>
+            <th className="num" title={LIVE_LABEL}>Live LTP</th><th className="num" title={LIVE_LABEL}>Live %</th><th className="num" title={LIVE_LABEL}>VWAP</th>
           </tr></thead>
           <tbody>
             {wl.rows.map((r) => (
@@ -67,6 +72,10 @@ export default function Watchlist() {
                 <td className="num">{fmt(r.metrics.volr50)}</td>
                 <td>{r.flags.candles.join(", ") || <span className="muted">–</span>}</td>
                 <td>{r.flags.results_meeting ? <span className="pill warn">{r.flags.results_meeting}</span> : <span className="muted">–</span>}</td>
+                {(() => { const q = live?.summary.keys[r.instrument_key]; return (<>
+                  <td className="num">{fmt(q?.ltp)}</td>
+                  <td className="num" style={{ color: (q?.chg_pct ?? 0) >= 0 ? "var(--up)" : "var(--down)" }}>{q?.chg_pct == null ? "–" : fmt(q.chg_pct)}</td>
+                  <td className="num">{fmt(q?.vwap)}</td></>); })()}
               </tr>
             ))}
           </tbody>

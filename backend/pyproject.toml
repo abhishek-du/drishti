@@ -15,6 +15,9 @@ dependencies = [
     "pyarrow>=15",
     "pyotp>=2.9",
     "curl_cffi>=0.7",
+    "websockets>=15",
+    "protobuf>=5",
+    "zstandard>=0.22",
 ]
 
 [project.optional-dependencies]
