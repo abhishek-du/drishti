@@ -20,6 +20,22 @@ class Settings(BaseSettings):
     # share of the Upstox per-API budget (50/s, 500/min, 2000/30 min per user) Drishti may use;
     # the account is shared with Prajna (decision A)
     DRISHTI_UPSTOX_RATE_FRACTION: float = 0.3
+    # Option B (user 2026-10-29): Drishti's own Upstox app and daily TOTP login. The login is
+    # refused until DRISHTI_UPSTOX_LOGIN_ENABLED is true (set on the switch day, S+1) and the
+    # token file is Drishti's own. Values live only in .env (0600) and are never printed.
+    DRISHTI_UPSTOX_API_KEY: str = ""
+    DRISHTI_UPSTOX_API_SECRET: str = ""
+    DRISHTI_UPSTOX_REDIRECT_URL: str = ""
+    DRISHTI_UPSTOX_USERNAME: str = ""
+    DRISHTI_UPSTOX_PIN: str = ""
+    DRISHTI_UPSTOX_TOTP_SECRET: str = ""
+    DRISHTI_UPSTOX_LOGIN_ENABLED: bool = False
+
+
+OWN_TOKEN_FILE = BACKEND / "var" / "upstox_token.json"
+LOGIN_FIELDS = ("DRISHTI_UPSTOX_API_KEY", "DRISHTI_UPSTOX_API_SECRET",
+                "DRISHTI_UPSTOX_REDIRECT_URL", "DRISHTI_UPSTOX_USERNAME", "DRISHTI_UPSTOX_PIN",
+                "DRISHTI_UPSTOX_TOTP_SECRET")
 
 
 @lru_cache

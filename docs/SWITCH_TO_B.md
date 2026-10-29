@@ -231,3 +231,72 @@ Only docs are changed; no Prajna code is changed. Prajna's memory notes are upda
 | **D4** | Pre-open and tick recordings stop at S (not backfillable) until the disk is enlarged | Accept, unless the disk can be enlarged before S |
 | **D5** | Credentials: Drishti's `.env` needs `UPSTOX_API_KEY`, `UPSTOX_API_SECRET`, `UPSTOX_CLIENT_ID`, `UPSTOX_PIN`, `UPSTOX_REDIRECT_URL`, `UPSTOX_TOTP_SECRET`, `UPSTOX_USERNAME` | Either the user copies them, or the user authorises a one-line copy from Prajna's `.env` to Drishti's `.env` (0600) that never prints a value |
 | **D6** | Switch date | **Friday 2026-11-13**, after the close job (P1c built by ~11-12; shadow sessions 11-05, 06, 09, 11, 12; 11-10 is a holiday) |
+
+---
+
+## User decisions (2026-10-29)
+
+| # | Decision |
+|---|---|
+| D1 | **Copy** (Option 2). Also a separate **archival dump** of every irreplaceable dataset, with sha256, kept on /windows and on a second location the user provides: CA history, vendor basis/observations, pre-open recordings, news + news AI + results events. Interim archive 2026-10-29 in `/windows/prajna_archive/irreplaceable_20261029/`; the final archive is made on the switch night after the delta copy |
+| D2 | **(b): no NSE fetching from any system.** Prajna's news collector stops with the rest. The results calendar comes from an NSE board-meetings CSV that the user downloads by hand every **Mon and Thu** into `drishti_data/manual/`, with a freshness guard like ASM/GSM: **STALE > 4 days**. News comes from Upstox **`/v2/news`** (Drishti ingest). So the cron diff runs **without** `KEEP_NEWS`, and the events-only line is not added |
+| D3 | **Yes:** nightly 1m/15m/1h for the top 500. Also fill Prajna's pending 1m gap (2026-04-29 → 07-17) once Drishti owns the budget. GB estimate below |
+| D4 | Accepted: the pre-open/tick gap lasts until the disk is enlarged |
+| D5 | The user creates a **separate Upstox developer app** for Drishti (new API key and secret, same TOTP) and puts its keys in `drishti/backend/.env`. After the switch the user **revokes Prajna's app keys**, so Prajna cannot call Upstox at all. The env names are below |
+| D6 | The shadow overlap starts only once P1c is complete, so the switch moves to **Friday 2026-11-20** (schedule below) |
+
+### Env names Drishti expects (names only; in `drishti/backend/.env`, mode 0600)
+
+| Name | Meaning |
+|---|---|
+| `DRISHTI_UPSTOX_API_KEY` | API key (client_id) of the new Drishti app |
+| `DRISHTI_UPSTOX_API_SECRET` | Its API secret |
+| `DRISHTI_UPSTOX_REDIRECT_URL` | The redirect URL registered on the new app (it must match exactly) |
+| `DRISHTI_UPSTOX_USERNAME` | The login mobile number (same account) |
+| `DRISHTI_UPSTOX_PIN` | The account PIN |
+| `DRISHTI_UPSTOX_TOTP_SECRET` | The TOTP seed (same as today) |
+| `DRISHTI_UPSTOX_LOGIN_ENABLED` | `false` until the switch. Login is refused unless this is `true` (set on S+1) |
+| `DRISHTI_UPSTOX_TOKEN_FILE` | Already present. On S+1 it changes from Prajna's token file to `/home/cis/windows/drishti/backend/var/upstox_token.json` |
+
+**Why Drishti never logs in before S:** whether a second login on the same account (even through a different app) invalidates Prajna's token is UNVERIFIED, so decision A's rule stands until the switch.
+
+### D3 estimate (shown before anything runs)
+
+- **Nightly top 500:**
+  - 1m: 500 × 375 bars ≈ 188 k rows/day, ≈ 1.3 MB;
+  - 15m: ≈ 0.2 MB;
+  - 1h: ≈ 0.1 MB;
+  - **≈ 1.6 MB/day, ≈ 0.4 GB/year** on /windows. Requests: 1,500 a night, ≈ 30 min at fraction 0.8.
+- **1m gap 2026-04-29 → 07-17:**
+  - 55 sessions × 3,606 instruments (Prajna's PENDING_BACKFILL set), ~85 % trading on a given day, gives ≈ 62 M rows, **≈ 0.4–0.5 GB** Parquet/zstd.
+  - About 11 k requests (minute data comes in ≤ 1 month per request), ≈ 3.5 h at fraction 0.8, run over one or two nights after S.
+  - The Upstox depth for April 2026 is verified on 5 names before the full run.
+
+### Schedule (D6): switch Friday 2026-11-20
+
+NSE holidays in the window: **Tue 2026-11-10** (Diwali Balipratipada) and **Tue 2026-11-24** (Guru Nanak Jayanti). Muhurat is Sun 2026-11-08, which is not a session (SC1).
+
+| Date | Work | Session? |
+|---|---|---|
+| Thu 10-29 | Decisions recorded; Drishti env and config; guarded login module (mocked tests only); interim archive dump | yes |
+| Fri 10-30 | Instrument master ingest + Drishti instrument tables; board-meetings CSV loader + STALE > 4 d guard (needs one sample CSV from the user) | yes |
+| Mon 11-02 | Official 1d ingest (V3 historical, Drishti tables; nightly 22:00–05:30 under A rules) | yes |
+| Tue 11-03 | CA ingest (`/v2/fundamentals/{ISIN}/corporate-actions`) | yes |
+| Wed 11-04 | CA factor derivation (port of Prajna's), exact check against `ca_factor` | yes |
+| Thu 11-05 | Vendor-applied detection + basis; Drishti-adjusted vs Prajna-adjusted check tool | yes |
+| Fri 11-06 | Upstox `/v2/news` ingest; intraday top-500 job (Parquet); 1m-gap job (runs only after S) | yes |
+| Mon 11-09 | Copy tooling + verification hashes; dry run on one month | yes |
+| Tue 11-10 | **NSE holiday.** Re-point Drishti reads to its own tables (behind a flag); switch scripts | **no** |
+| Wed 11-11 | Full copy #1 (night) + verification | yes |
+| Thu 11-12 | **P1c complete.** Shadow session 1 (night ingest) | yes |
+| Fri 11-13 | Shadow 2 (P2's remaining work continues during the shadow) | yes |
+| Mon 11-16 | Shadow 3 | yes |
+| Tue 11-17 | Shadow 4 | yes |
+| Wed 11-18 | Shadow 5 | yes |
+| Thu 11-19 | Shadow 6 (buffer); switch rehearsal checklist | yes |
+| **Fri 11-20** | **Switch** after Prajna's close job (~19:30): cron diff, dashboard stop, delta copy + verification, **final archive dump** | yes |
+| Sat 11-21 | 06:10 first Drishti login; 06:30 1d of 11-20; CA sweep | no |
+| Mon 11-23 | First Drishti-only session; verification 6.4; the user revokes Prajna's app keys after it passes; 1m-gap backfill night 1 | yes |
+| Tue 11-24 | **NSE holiday**; 1m-gap night 2 if needed | **no** |
+
+If any shadow session fails a continuity check, the switch moves one week, to Fri 2026-11-27.

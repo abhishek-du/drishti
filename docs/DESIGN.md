@@ -266,7 +266,24 @@ Prajna stops, and Drishti owns Upstox; see `SWITCH_TO_B.md`. P1c covers:
 
 **Estimate:** ≈ 8–10 working days. P3 onward shift by that much.
 
-The proposed switch is Friday 2026-11-13, after Prajna's close job. P1/P2/E5/E6 end on the switch day with protocol-deviation notes and no look.
+The user's decisions D1–D6 are in `SWITCH_TO_B.md`: copy plus an archive, no NSE fetching, top-500 intraday, separate Upstox app. The switch is on **Friday 2026-11-20**, after Prajna's close job. P1/P2/E5/E6 end on the switch day with protocol-deviation notes and no look.
+
+### Revised timeline (2026-10-29)
+
+| Phase | Dates (dev days) | Notes |
+|---|---|---|
+| P0, P1 | done (2026-10-28/29) | n/a |
+| P2 part 1 | done (2026-10-29) | Scout, API, web |
+| **P1c** | 10-29 → 11-12 | Option B ingest, copy, archive |
+| Shadow overlap | sessions 11-12, 13, 16, 17, 18, (19) | Rest of P2 in parallel |
+| **Switch** | Fri 11-20 evening | Drishti-only from Mon 11-23 |
+| P3 | 11-23 → 11-30 | Features, strategies, replay; **pre-P6 power check reported ~11-30** |
+| P4 | 12-01 → 12-07 | Labels, purged CV, LightGBM, calibration |
+| P5 | 12-08 → 12-11 | Risk Manager (incl. SC6 BAND_VETO), paper trader, SC3 recheck, Narrator, Telegram |
+| P6 | 12-14 → 12-16 | Judge, freeze model #1 (`FREEZE_M1.md`) |
+| **Forward test start** | **Thu 2026-12-17** (first session after the freeze) | Earliest look ≥ 40 sessions ≈ mid-Feb 2027; 120-session cap ≈ early June 2027 (2027 holidays to confirm) |
+
+The forward-start date also depends on the pre-P6 power check. If the projection under the current regime is beyond 120 sessions, the user decides between "start as frozen" and a documented v2 before the freeze.
 
 ## Pre-P6 power check (user, 2026-10-29)
 
