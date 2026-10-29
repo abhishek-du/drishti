@@ -103,3 +103,17 @@ def test_placebo_uses_the_seeded_draw():
     r = orders.placebo_order(*_arr(rows), 0, 2.0, [], 0.25)
     assert r["entry"] == pytest.approx(99.75)
     assert r["stop"] == pytest.approx(min(98 - 0.2, 99.75 - 2))
+
+
+def test_exploratory_longer_hold_and_trailing_ma_exit():
+    rows = [(100.0, 100.6, 99.5, 100.1 + 0.1 * i) for i in range(12)]
+    o, h, lo, c = _arr(rows)
+    assert orders.exit_path(o, h, lo, c, 0, 97.0, 200.0, hold=10) == ("TIME", c[9], 9)
+    assert orders.exit_path(o, h, lo, c, 0, 97.0, 200.0, hold=20) is None     # bars run out
+    ma = np.full(12, 99.0)
+    ma[4] = 100.6                                        # close 100.5 < MA on session 5
+    assert orders.exit_trail(o, h, lo, c, ma, 0, 97.0) == ("TRAIL", c[4], 4)
+    ma[0] = 200.0                                        # the fill bar is never a trail exit
+    lo2 = lo.copy()
+    lo2[2] = 96.0
+    assert orders.exit_trail(o, h, lo2, c, ma, 0, 97.0) == ("SL", 97.0, 2)    # stop first
