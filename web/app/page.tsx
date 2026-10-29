@@ -11,7 +11,7 @@ type WL = {
          regime: Record<string, any>; surveillance: Record<string, any>; counts: Record<string, number> };
   rows: Row[]; dropped: string[];
 };
-const FUNNEL = ["with_bar_on_T", "eq_series", "eligible", "trend_up", "rs_top", "beats_nifty500_3m",
+const FUNNEL = ["with_bar_on_T", "eq_series", "eligible", "band_ok", "trend_up", "rs_top", "beats_nifty500_3m",
   "near_52w_high", "atr_pct_ok", "listed"];
 
 export default function Watchlist() {
@@ -34,6 +34,7 @@ export default function Watchlist() {
         <span className="pill">{wl.run.version}</span>
         <span className={`pill ${wl.run.bar_source === "official" ? "on" : "warn"}`}>bar: {wl.run.bar_source}</span>
         <span className={`pill ${g.status === "ON" ? "on" : "off"}`}>regime {g.status}</span>
+        {g.spec_gate && <span className={`pill ${g.spec_gate === "ON" ? "on" : "off"}`} title="spec §5 gate: Nifty 500 > SMA200; OFF = no new S1a–S3 entries (SC4)">spec gate {g.spec_gate}</span>}
         {g.stale && <span className="pill warn">index bar from {g.nifty500_date}</span>}
         {g.vix_spike && <span className="pill off">VIX spike</span>}
         {wl.run.surveillance?.warning && <span className="pill warn">ASM/GSM file stale</span>}

@@ -17,7 +17,7 @@ from sqlalchemy import text
 from drishti.core import runlog
 from drishti.core.clock import now, today
 from drishti.core.db import prajna_sessionmaker, sessionmaker
-from drishti.data import bars, holidays, manual
+from drishti.data import bars, eod_quotes, holidays, manual
 from drishti.data.holidays import SHORT_SESSIONS
 from drishti.scout import screener_b as sb
 
@@ -54,7 +54,14 @@ async def scout(s, ps, day: _dt.date) -> dict:
     reg = sb.regime(idx, day)
     eq = await manual_isins(s, ("EQUITY_L",), day, "EQ")
     blocked = await manual_isins(s, ("ASM", "GSM"), day)
-    listed, funnel = sb.screen(st, eq, blocked, reg, day)
+    q = (await s.execute(text("""
+        with r as (select r.run_id from run r join run_end e using (run_id)
+                   where r.kind = 'P1_EOD' and r.session_date = :d and e.status = 'OK'
+                   order by r.started_at limit 1)
+        select instrument_key, upper_circuit, lower_circuit, last_price, net_change
+        from eod_quote where run_id = (select run_id from r)"""), {"d": day})).all()
+    bands = {k: eod_quotes.band_pct(u, lo, lp, nc) for k, u, lo, lp, nc in q}
+    listed, funnel = sb.screen(st, eq, blocked, reg, day, bands)
     window = await next_sessions(s, day, 6)
     res = dict((await ps.execute(text("""select instrument_key, min(meeting_date) from results_event
         where kind = 'INTIMATION' and meeting_date between :a and :b and knowable_at < :t

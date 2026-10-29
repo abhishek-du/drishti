@@ -9,7 +9,7 @@ case "${1:?start|stop|status}" in
   start)
     up api || { nohup .venv/bin/uvicorn drishti.api.app:app --host 127.0.0.1 --port 8700 \
                   >> var/logs/api.log 2>&1 & echo $! > var/run/api.pid; }
-    up web || { (cd ../web && nohup npx next start -H 127.0.0.1 -p 3100 \
+    up web || { (cd ../web && NODE_ENV=production nohup /home/cis/.local/bin/node node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3100 \
                   >> ../backend/var/logs/web.log 2>&1 & echo $! > ../backend/var/run/web.pid); } ;;
   stop)
     for s in web api; do

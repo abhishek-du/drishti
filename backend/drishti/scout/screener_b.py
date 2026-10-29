@@ -22,9 +22,12 @@ PARAMS = {
     "min_close_vs_52w_high": 0.85,
     "atr_pct": [0.02, 0.06],
     "max_listed": 300,
-    "regime": "Nifty 500 close > SMA200 and India VIX < 20 (recorded; the list is kept when OFF)",
+    "exclude_price_band_pct": [2, 5],
+    "price_band_source": "15:40 quote circuit limits (from 2026-10-29; SC5); unknown band = kept",
+    "regime": "Nifty 500 close > SMA200 and India VIX < 20 (recorded; the list is kept when OFF). "
+              "spec_gate = Nifty 500 close > SMA200 only, the spec section 5 signal gate (SC4)",
     "not_applied": ["sector index > 50 DMA (needs a sector-index map: P3)",
-                    "delivery % (no source)", "2/5 % price band (no source)"],
+                    "delivery % (no source)"],
 }
 
 
@@ -60,14 +63,16 @@ def regime(idx: pd.DataFrame, day: _dt.date) -> dict:
     up = out.get("nifty500", 0) > out.get("nifty500_sma200", np.inf)
     calm = out.get("vix", np.inf) < 20
     spike = out.get("vix", 0) >= 25 or out.get("vix_5d_change", 0) >= 0.20
-    out["status"] = "ON" if up and calm else "OFF"
+    out["status"] = "ON" if up and calm else "OFF"          # Screener B view (also VIX < 20)
+    out["spec_gate"] = "ON" if up else "OFF"               # spec section 5 gate (SC4)
     out["vix_spike"] = bool(spike)
     out["stale"] = out["nifty500_date"] != str(day)
     return out
 
 
 def screen(st: pd.DataFrame, eq_isins: set[str], blocked_isins: set[str], reg: dict,
-           day: _dt.date) -> tuple[pd.DataFrame, dict]:
+           day: _dt.date, bands: dict[str, int | None] | None = None
+           ) -> tuple[pd.DataFrame, dict]:
     """Return (listed rows ranked by RS, funnel counts)."""
     P, f = PARAMS, {}
     st = st[st.session_date == day]
@@ -80,8 +85,13 @@ def screen(st: pd.DataFrame, eq_isins: set[str], blocked_isins: set[str], reg: d
     st = st.sort_values("tv20", ascending=False).iloc[:P["top_by_tv20"]]
     st = st[~st.index.str.split("|").str[1].isin(blocked_isins)]
     f["eligible"] = len(st)
-    st = st.assign(rs_score=indicators.rs_score(st.mr6, st.mr12))
+    st = st.assign(rs_score=indicators.rs_score(st.mr6, st.mr12))   # on the spec universe
     cut = st.rs_score.quantile(P["rs_top_quantile"])
+    bands = bands or {}
+    band = st.index.map(lambda k: bands.get(k))
+    f["band_known"] = int(pd.notna(band).sum())
+    st = st[~band.isin(P["exclude_price_band_pct"])]
+    f["band_ok"] = len(st)
     st = st[(st.close > st.sma50) & (st.sma50 > st.sma200) & (st.sma200_slope20 > 0)]
     f["trend_up"] = len(st)
     st = st[st.rs_score >= cut]

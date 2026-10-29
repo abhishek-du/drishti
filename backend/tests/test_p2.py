@@ -75,6 +75,20 @@ def test_screen_funnel_and_rules():
     assert (listed.close > listed.sma50).all() and (listed.sma50 > listed.sma200).all()
     assert ((listed.atr_pct >= 0.02) & (listed.atr_pct <= 0.06)).all()
     assert f["listed"] == len(listed) <= f["atr_pct_ok"] <= f["near_52w_high"]
+    # a 5 % band name is left out; RS is still scored on the whole eligible universe
+    first = listed.index[0]
+    other = next(k for k in st.index if k not in (first, "NSE_EQ|INE000000000"))
+    l2, f2 = sb.screen(st, isins, blocked, reg, day, {first: 5, other: 20})
+    assert first not in l2.index and f2["band_known"] == 2 and f2["band_ok"] == 4
+    assert l2.rs_score.to_dict() == {k: v for k, v in listed.rs_score.items() if k != first}
+
+
+def test_price_band_from_circuit_limits():
+    from drishti.data.eod_quotes import band_pct
+    assert band_pct(47.51, 45.65, 47.51, 0.93) == 2        # RELINFRA 2026-10-29
+    assert band_pct(78.57, 52.39, 65.34, -0.14) == 20       # SBC
+    assert band_pct(1273.8, 1042.2, 1169.8, 11.8) == 10     # RELIANCE (F&O: +-10 % range)
+    assert band_pct(None, 1, 1, 1) is None and band_pct(130, 70, 100, 0) is None
 
 
 def test_watchlist_tables_are_append_only_in_test_db():

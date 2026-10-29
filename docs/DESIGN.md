@@ -251,3 +251,18 @@ web/ (Next.js + lightweight-charts)   ops/ (runbooks + systemd user units)   doc
 3. Install the systemd user units (prepared in P1).
 4. Mask suspend.
 5. A new Bedrock key (optional, for the Narrator).
+
+## Pre-P6 power check (user, 2026-10-29)
+
+The P3 replay (2019 → cut-off, official bars, SURVIVORSHIP-BIASED, EXPLORATORY) must report the following **before P6**:
+
+1. **Signal events per session**, split by `spec_gate` ON and OFF (SC4: with the gate OFF there are no entries, so the OFF count is 0 by construction). Also the share of sessions in each regime, and the events per ON session by strategy (S1a/S1b/S2/S3).
+2. **Projected sessions to the look:** how many sessions it takes to reach ≥ 100 closed and ≥ 30 confirmed events (PREREG_M1), under three regime mixes:
+   - the current regime;
+   - the historical ON share;
+   - a range between them.
+
+   The 120-session cap is shown against each projection.
+3. **A flag** if the projection under the current regime is beyond 120 sessions. The user then decides, **before the freeze**, between starting the forward test as frozen and a documented `drishti-swing-v2`.
+
+These are replay numbers on history, not forward results, so they do not break the blind rule. No forward-window data is used.

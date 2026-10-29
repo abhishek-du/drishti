@@ -69,3 +69,39 @@ The spec says a signal is "recomputed and flagged `BAR_REVISED`" when the offici
 - The 15:40 snapshot also stores the 21 index quotes as provisional index bars of T (`index_bar`, source `UPSTOX_QUOTE`, same last-trade-today rule).
 - The 22:15 historical job still adds the official bars, which arrive one day later.
 - The regime gate at 19:30 reads the provisional Nifty 500 close of T.
+
+## SC4 (2026-10-29): what regime OFF does to new long entries
+
+**The frozen spec (section 5).** The "regime OK" condition is one of the common gates that **all must hold on T** for any S1a/S1b/S2/S3 signal. The gate reads: "Nifty 500 close > its SMA200 (index 1d from Upstox; until it is ingested, fallback = ≥ 50 % of the universe above its SMA200)".
+
+**So with regime OFF, new S1a–S3 long entries are blocked entirely, not just filtered or down-ranked.**
+- There is no signal, so there is no paper order and no set-(b) event.
+- Set (a) all-bar rows and their labels are still computed. They are features and labels, not entries.
+- Open positions are not affected. Their exits stay exactly as in section 6, and there is no forced exit on a regime change.
+
+**The VIX rule is separate from the gate:**
+- **Normal:** India VIX < 20.
+- **Spike:** VIX ≥ 25, or a 5-session change of +20 % or more. In a spike, S3 is off and every other size is halved.
+- **VIX 20–25 without a +20 % move:** neither normal nor spike. No VIX rule applies; entries and sizes are unchanged.
+
+**Scout's regime label is not the spec gate.** Screener B's own regime label ("ON" only when Nifty 500 > SMA200 **and** VIX < 20) is a Scout display label. Each Scout run therefore records both:
+- `status`: the Screener B view;
+- `spec_gate`: the section 5 gate, Nifty 500 > SMA200 only.
+
+Only `spec_gate` will ever gate a signal.
+
+**Consequence to watch.** On 2026-10-28 Nifty 500 was 21,734.9 against an SMA200 of 22,808.7. That is `spec_gate` OFF, so the frozen rules would give **zero** signal events today. P3 reports how this bears on the forward-test timeline; see `DESIGN.md`, "Pre-P6 power check".
+
+## SC5 (2026-10-29): price band in Scout
+
+**Data source.** Upstox's full market quote gives `upper_circuit_limit` and `lower_circuit_limit`. The 15:40 snapshot stores them from 2026-10-29 (migration 0003). The band is computed as the circuit width around the previous close (last_price − net_change), mapped to the nearest NSE band of 2/5/10/20 %. Examples from 2026-10-29: RELINFRA 2 %, SBC 20 %, RELIANCE 10 % (F&O: ±10 % operating range).
+
+**Scout (scout-b-v1)** leaves out names in a 2 % or 5 % band:
+- Screener B already lists this exclusion, which was marked "no source" until now. So the Scout thresholds are unchanged.
+- It is applied **after** the RS score, so `RS_top` is still scored on the spec's eligible universe.
+- A name with an unknown band (no limits in the quote, or rows from before 2026-10-29) is kept.
+- The funnel records `band_known` and `band_ok`.
+
+**The frozen spec's universe (section 2) does not list a price-band exclusion.** Signals, labels and the model universe are therefore **not** changed by this; adding the exclusion there would be a rule change, `drishti-swing-v2`.
+
+Delivery % stays out: there is no source.
