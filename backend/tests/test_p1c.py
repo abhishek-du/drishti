@@ -152,3 +152,61 @@ def test_board_meetings_parse_and_freshness_in_test_db():
             assert f["BOARD_MEETINGS"]["status"] == "STALE" and f["warning"]
         await engine().dispose()
     asyncio.run(go())
+
+
+def test_a_rule_window(monkeypatch):
+    import datetime as _dt
+
+    from drishti.core.clock import IST
+    from drishti.data import daily1d
+    monkeypatch.setenv("DRISHTI_UPSTOX_LOGIN_ENABLED", "false")
+    config.get_settings.cache_clear()
+    t = lambda h, m: _dt.datetime(2026, 11, 2, h, m, tzinfo=IST)  # noqa: E731
+    assert daily1d.a_rule_ok(t(22, 0)) and daily1d.a_rule_ok(t(3, 0)) and daily1d.a_rule_ok(t(5, 30))
+    assert not daily1d.a_rule_ok(t(5, 31)) and not daily1d.a_rule_ok(t(14, 0))
+    monkeypatch.setenv("DRISHTI_UPSTOX_LOGIN_ENABLED", "true")
+    config.get_settings.cache_clear()
+    assert daily1d.a_rule_ok(t(14, 0))
+    config.get_settings.cache_clear()
+
+
+def test_daily1d_store_keeps_every_fetch_in_test_db():
+    import asyncio
+    import datetime as _dt
+    import uuid
+
+    import httpx
+    from sqlalchemy import text
+
+    from drishti.broker.upstox.rest import Upstox
+    from drishti.core import migrate, runlog
+    from drishti.core.db import engine, sessionmaker
+    from drishti.data import daily1d
+
+    def handler(req):
+        if "BAD" in str(req.url):
+            return httpx.Response(400, json={"status": "error", "errors": [{"errorCode": "UDAPI100011"}]})
+        return httpx.Response(200, json={"data": {"candles": [
+            ["2031-05-06T00:00:00+05:30", 10, 12, 9, 11, 1000, 0],
+            ["2031-05-05T00:00:00+05:30", 9, 10, 8, 9.5, 900, 0]]}})
+
+    api = Upstox(fraction=1.0, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    api._token = "test"
+
+    async def go():
+        await migrate.main(False)
+        async with sessionmaker()() as s:
+            rid = await runlog.start(s, "TEST_1D")
+            c = await daily1d.fetch_store(s, rid, api, ["NSE_EQ|INETEST00001", "NSE_EQ|BAD"],
+                                          _dt.date(2031, 5, 6))
+            assert c == {"keys": 2, "ok": 1, "empty": 0, "errors": 1, "candles": 2}
+            rid2 = await runlog.start(s, "TEST_1D")
+            await daily1d.fetch_store(s, rid2, api, ["NSE_EQ|INETEST00001"], _dt.date(2031, 5, 6))
+            n = (await s.execute(text("""select count(*) from bar_1d
+                where instrument_key = 'NSE_EQ|INETEST00001' and session_date = '2031-05-06'"""))).scalar()
+            assert n >= 2                                     # both fetches kept
+            e = (await s.execute(text("""select http_status, error from bar_1d_payload
+                where run_id = :r and instrument_key = 'NSE_EQ|BAD'"""), {"r": rid})).one()
+            assert e[0] == 400 and "UDAPI100011" in e[1]
+        await engine().dispose()
+    asyncio.run(go())

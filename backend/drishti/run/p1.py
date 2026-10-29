@@ -6,6 +6,8 @@
     .venv/bin/python -m drishti.run.p1 eod            # after 15:35 IST on a trading day
     .venv/bin/python -m drishti.run.p1 barcheck [--date 2026-10-28]   # T+1 after 09:00
     .venv/bin/python -m drishti.run.p1 master        # Upstox public NSE master (06:20)
+    .venv/bin/python -m drishti.run.p1 daily1d [--to D] [--limit N]   # official 1d (P1c)
+    .venv/bin/python -m drishti.run.p1 compare1d [--date D]           # vs Prajna (shadow)
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from drishti.core import runlog
 from drishti.core.clock import IST, now, today
 from drishti.core.config import BACKEND, get_settings
 from drishti.core.db import prajna_sessionmaker, sessionmaker
-from drishti.data import bar_check, eod_quotes, holidays, indices, manual, master
+from drishti.data import bar_check, daily1d, eod_quotes, holidays, indices, manual, master
 
 
 async def trading_day(s, d: _dt.date) -> bool:
@@ -117,6 +119,23 @@ async def main(cmd: str, args: list[str]) -> dict:
                 out = await master.store(s, rid, raw, total, kept)
                 async with prajna_sessionmaker()() as ps:
                     out["vs_prajna"] = await master.compare_with_prajna(s, ps)
+            elif cmd == "daily1d":
+                if not daily1d.a_rule_ok(now()):
+                    raise SystemExit("REFUSED: decision A: historical API only 22:00-05:30 IST "
+                                     "until the switch")
+                to = _dt.date.fromisoformat(args[args.index("--to") + 1]) if "--to" in args \
+                    else today()
+                keys = await daily1d.universe(s)
+                if "--limit" in args:
+                    keys = keys[:int(args[args.index("--limit") + 1])]
+                out = await daily1d.fetch_store(s, rid, Upstox(fraction=min(
+                    0.5, get_settings().DRISHTI_UPSTOX_RATE_FRACTION)), keys, to)
+            elif cmd == "compare1d":
+                from sqlalchemy import text
+                day = _dt.date.fromisoformat(args[args.index("--date") + 1]) if "--date" in args \
+                    else (await s.execute(text("select max(session_date) from bar_1d"))).scalar()
+                async with prajna_sessionmaker()() as ps:
+                    out = await daily1d.compare_with_prajna(s, ps, day)
             elif cmd == "barcheck":
                 out = await barcheck(s, args)
             else:

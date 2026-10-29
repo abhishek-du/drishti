@@ -49,6 +49,12 @@ class Upstox:
             time.sleep(max(waits))
 
     def get(self, path: str, params: dict | None = None) -> dict:
+        r = self.get_response(path, params)
+        r.raise_for_status()
+        return r.json()
+
+    def get_response(self, path: str, params: dict | None = None) -> httpx.Response:
+        """The raw response (the caller checks the status and keeps the body's sha256)."""
         url = path if path.startswith("http") else f"{API}{path}"
         if any(x in url for x in FORBIDDEN):
             raise PermissionError("Drishti never calls Upstox login endpoints")
@@ -59,5 +65,4 @@ class Upstox:
             "Authorization": f"Bearer {self._token}", "Accept": "application/json"})
         if r.status_code == 429:
             raise RateLimited(url)
-        r.raise_for_status()
-        return r.json()
+        return r

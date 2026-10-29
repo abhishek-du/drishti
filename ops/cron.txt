@@ -10,3 +10,7 @@
 30 19 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scout
 # Drishti instrument master (P1c; Upstox public file, no API budget, no token)
 20 6 * * *     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh master
+# Official 1d (P1c): before the switch only 22:00-05:30 (decision A), ~3 h at fraction 0.3
+40 22 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh daily1d
+# Shadow continuity: Drishti 1d vs Prajna 1d of the latest session (Prajna's 07:00 fetch ends ~08:30)
+35 9 * * 2-6   /home/cis/windows/drishti/ops/runbooks/drishti_job.sh compare1d
