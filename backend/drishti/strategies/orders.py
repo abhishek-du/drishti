@@ -19,6 +19,7 @@ CAPITAL = 10_00_000.0
 RISK = 0.01
 HOLD = 5                     # sessions, fill day = session 1
 CLOSED = ("TP", "SL", "TIME")
+CLOSED_X = CLOSED + ("TRAIL",)        # EXPLORATORY exits
 
 
 def levels_at(high_t: float, low_t: float, atr_t: float, zs: list[dict], entry: float | None = None
@@ -33,11 +34,13 @@ def levels_at(high_t: float, low_t: float, atr_t: float, zs: list[dict], entry: 
     return {"trigger": trig, "stop": stop, "tp": tp, "rrr": (tp - e) / r if r > 0 else -np.inf}
 
 
-def exit_path(o, h, lo, c, start: int, stop: float, tp: float) -> tuple[str, float, int] | None:
-    """Section 6 exit from the fill bar `start` (session 1) to session 5: stop first (at the stop,
-    or the open on a gap through), then the target (or the open above it), else the session-5
-    close. On the fill bar a low <= stop is the stop. None when the bars run out first."""
-    for j in range(HOLD):
+def exit_path(o, h, lo, c, start: int, stop: float, tp: float, hold: int = HOLD
+              ) -> tuple[str, float, int] | None:
+    """Section 6 exit from the fill bar `start` (session 1) to session `hold` (5 in v1): stop
+    first (at the stop, or the open on a gap through), then the target (or the open above it),
+    else the close of the last session. On the fill bar a low <= stop is the stop. None when
+    the bars run out first. hold != 5 is EXPLORATORY only."""
+    for j in range(hold):
         i = start + j
         if i >= len(c):
             return None
@@ -49,7 +52,25 @@ def exit_path(o, h, lo, c, start: int, stop: float, tp: float) -> tuple[str, flo
             return "TP", float(o[i]), i
         if h[i] >= tp:
             return "TP", tp, i
-    return "TIME", float(c[start + HOLD - 1]), start + HOLD - 1
+    return "TIME", float(c[start + hold - 1]), start + hold - 1
+
+
+def exit_trail(o, h, lo, c, ma, start: int, stop: float, max_hold: int = 60
+               ) -> tuple[str, float, int] | None:
+    """EXPLORATORY trailing-MA exit (never v1): stop as section 6 (stop first, gap through, the
+    fill bar's low), no target; from session 2, exit at the close of the first session whose
+    close < `ma` (that bar's moving average); else the close of session `max_hold`."""
+    for j in range(max_hold):
+        i = start + j
+        if i >= len(c):
+            return None
+        if j > 0 and o[i] < stop:
+            return "SL", float(o[i]), i
+        if lo[i] <= stop:
+            return "SL", stop, i
+        if j > 0 and c[i] < ma[i]:
+            return "TRAIL", float(c[i]), i
+    return "TIME", float(c[start + max_hold - 1]), start + max_hold - 1
 
 
 def _result(status: str, **kw) -> dict:
