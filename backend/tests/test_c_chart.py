@@ -204,3 +204,61 @@ def test_read_only():
         src = f.read_text().lower()
         assert not re.search(r"\b(insert|update|delete|commit|upstox|truncate|drop table)\b",
                              src.replace("update(", "")), f.name
+
+
+# --- indicators menu, Heikin Ashi, Supertrend ---------------------------------------------------
+
+@pytest.mark.parametrize("kind,keys", [("ema", {"ema"}), ("sma", {"sma"}), ("vwap", {"vwap"}),
+                                       ("bb", {"bb_mid", "bb_up", "bb_lo"}), ("rsi", {"rsi"}),
+                                       ("macd", {"macd", "macd_signal", "macd_hist"}),
+                                       ("atr", {"atr"}), ("supertrend", {"st", "st_dir"})])
+def test_indicator_endpoint(client, kind, keys):
+    r = client.get("/api/chart2/indicator", params={"key": "K", "tf": "5m", "kind": kind, "n": 14})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert set(j["series"]) == keys and j["label"].startswith("LIVE VIEW")
+    assert all(isinstance(p["time"], int) for p in next(iter(j["series"].values())))
+
+
+def test_indicator_values_match_features(client):
+    """The menu's default instances give the same numbers as /bars (one implementation)."""
+    b = client.get("/api/chart2/bars", params={"key": "K", "tf": "1d"}).json()
+    get = lambda **p: client.get("/api/chart2/indicator", params={"key": "K", "tf": "1d", **p}).json()["series"]  # noqa: E731
+    assert get(kind="ema", n=20)["ema"] == b["lines"]["ema20"]
+    assert get(kind="sma", n=200)["sma"] == b["lines"]["sma200"]
+    assert get(kind="rsi", n=14)["rsi"] == b["panes"]["rsi"]
+    assert get(kind="bb", n=20, k=2)["bb_up"] == b["lines"]["bb_up"]
+    assert get(kind="macd")["macd_hist"] == b["panes"]["macd_hist"]
+
+
+def test_indicator_bad_params(client):
+    q = {"key": "K", "tf": "1d"}
+    assert client.get("/api/chart2/indicator", params={**q, "kind": "kdj"}).status_code == 400
+    assert client.get("/api/chart2/indicator", params={**q, "kind": "vwap"}).status_code == 400
+    assert client.get("/api/chart2/indicator", params={**q, "kind": "ema", "n": 0}).status_code == 422
+    assert client.get("/api/chart2/indicator",
+                      params={**q, "kind": "macd", "fast": 30, "slow": 26}).status_code == 400
+
+
+def test_heikin_ashi(client):
+    df = _bars(5)
+    ha = chart_api.heikin_ashi(df)
+    o, c = df.open.to_numpy(), df.close.to_numpy()
+    assert ha.close.iloc[0] == pytest.approx((df.open + df.high + df.low + df.close).iloc[0] / 4)
+    assert ha.open.iloc[0] == pytest.approx((o[0] + c[0]) / 2)
+    assert ha.open.iloc[1] == pytest.approx((ha.open.iloc[0] + ha.close.iloc[0]) / 2)
+    assert (ha.high >= ha[["open", "close"]].max(axis=1)).all()
+    j = client.get("/api/chart2/bars", params={"key": "K", "tf": "1d", "ha": True}).json()
+    plain = client.get("/api/chart2/bars", params={"key": "K", "tf": "1d"}).json()
+    assert j["heikin_ashi"] and j["bars"][0]["open"] != plain["bars"][0]["open"]
+    assert j["lines"] == plain["lines"] and j["trend"] == plain["trend"]   # on the real bars
+
+
+def test_supertrend_stub():
+    up = np.linspace(100, 200, 120)
+    df = pd.DataFrame({"open": up, "close": up, "high": up + 1, "low": up - 1, "volume": 1.0})
+    s = st.supertrend(df, n=10, mult=3.0)
+    assert s.st.iloc[:9].isna().all() and s.st_dir.iloc[-1] == 1
+    assert (s.st.iloc[20:] < df.close.iloc[20:]).all()          # below price in an uptrend
+    a = st.supertrend(pd.concat([df, df.iloc[::-1]], ignore_index=True), n=10).iloc[:120]
+    pd.testing.assert_frame_equal(a, s)                          # no look-ahead
