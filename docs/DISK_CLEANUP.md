@@ -201,3 +201,39 @@ After Tiers 1–2 plus 3.2 and 3.3, /windows has ~66 GB free, which is just enou
 | **Tier 1** | Items 1.1–1.7 run by me; 1.8–1.10 run by the user (sudo) |
 | **Tier 2** | 2.1, 2.2 now; 2.3 by the user |
 | **Tier 3, per item** | 3.1 (after 11-20), 3.2, 3.3 (after the final dump), 3.5–3.8 (the user's own projects). **3.1–3.3 also need the second-location path** |
+
+---
+
+## Done 2026-10-29 (user approval: Tier 1 items 1.1–1.7, Tier 2 items 2.1 and 2.2 partly)
+
+**Free space before:** root 53.95 GB, /windows 35.98 GB (decimal GB; `df -h` showed 51G/34G in GiB).
+
+| # | Command | Expected | **Freed on root** | Note |
+|---|---|---|---|---|
+| 1.1 | `uv cache clean` | 1.55 GB | **0.06 GB** | The cache directory is gone, but uv **hardlinks** cached files into the venvs, so blocks shared with Drishti's and Prajna's `.venv` stay (both venvs checked: they import fine) |
+| 1.2 | `rm -r -- /home/cis/.cache/pip` | 0.76 GB | **0.77 GB** | n/a |
+| 1.3 | `npm cache clean --force` | 1.85 GB | **1.88 GB** | n/a |
+| 1.4 | `docker builder prune -f` | 0.9–2.4 GB | **0.90 GB** | n/a |
+| 1.5 | `xargs -0 rm -r --` over the printed list of 1,071 `__pycache__` dirs (Learnova, "download 22-09-26", cars, my-workbuddy, goengine; **Prajna, prajna-lab, Drishti, auto-trade-pro excluded**) | 0.17 GB | **0.20 GB** | Prajna's 0.59 GB follows after the switch |
+| 1.6 | `rm -r -- /tmp/tmp7n9ekjcl /tmp/tmpp4f94yog` | 0.38 GB | **0 GB on disk** | `/tmp` is tmpfs: 0.38 GB of RAM returned |
+| 1.7 | `rm --` of the 2 `/var/crash/*.crash` files | 0.06 GB | **0.06 GB** | n/a |
+| 2.1 | `rm -r -- /home/cis/windows/prajna/backend/var/venv-broken-py311-2026-09-22` | 8.07 GB | **8.32 GB** | n/a |
+| 2.2 (part) | `zstd -q --rm -19` on 414 Prajna log files older than 7 days and not open (`.log/.err/.out/.txt/.md`) | ~0.30 GB in | **0.27 GB** | `zstd -t` sample OK. **The 770 JSON outputs are left until after the switch** (Prajna code reads some `var/logs/daily` reports) |
+| **Total** | n/a | n/a | **12.46 GB** | /windows unchanged |
+
+**Free space after:** root **62 GB** (83 %), /windows 34 GB (51 %). Sanity checks: Drishti and Prajna venvs import, Drishti web 200.
+
+**Still open:**
+- **The user's (sudo):**
+  - 1.8: the 11 disabled snaps, ~2.69 GB;
+  - 1.9: journald, ~0.13 GB;
+  - 1.10: apt, ~0.11 GB;
+  - 2.3: rotated `/var/log`, ~0.04 GB.
+- **After the 2026-11-20 switch:**
+  - Prajna `__pycache__` (0.59 GB) and the rest of the Prajna logs including JSON (~0.35 GB);
+  - 3.1 training tables, only after the 10-table dump is verified at the second location (sha256 + `pg_restore -l`).
+- **When the second location exists:**
+  - 3.2: old dumps;
+  - 3.3: the 10-27 full dump, after the final frozen full dump is verified there.
+- **Not touched:** 3.4 (revisit after P6) and **3.5 showiq (never)**. 3.6–3.8 are the user's own decisions.
+- **Ticks:** the planned store is `/home/cis/drishti_ticks` on root, after 3.1. The user approves it when ticks are enabled.
