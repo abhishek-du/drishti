@@ -39,3 +39,16 @@ label.tog { display: inline-flex; gap: 4px; align-items: center; font-size: 13px
 .search li { padding: 4px 10px; cursor: pointer; }
 .search li:hover { background: var(--line); }
 pre { white-space: pre-wrap; word-break: break-word; }
+button.sel { font-weight: 700; border-color: var(--accent); color: var(--accent); }
+.trends { gap: 6px; font-size: 13px; }
+.toggles { gap: 8px 12px; margin-bottom: 6px; }
+.chartbox { position: relative; width: 100%; max-width: 100%; overflow: hidden; }
+.chartbox .livetag { position: absolute; z-index: 3; left: 6px; top: 4px; background: var(--bg); }
+.tip { position: absolute; z-index: 4; width: 230px; font-size: 12px; line-height: 1.4;
+  pointer-events: none; padding: 6px 8px; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+.chartgrid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
+.bias ul { margin: 6px 0 0; padding-left: 18px; }
+.bias li { margin-bottom: 4px; }
+.small { font-size: 12px; }
+@media (max-width: 900px) { .chartgrid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 480px) { main { padding: 10px; } .search ul { min-width: 0; width: calc(100vw - 32px); } }

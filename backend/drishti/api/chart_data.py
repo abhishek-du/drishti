@@ -1,0 +1,198 @@
+"""Bars for the chart's timeframes (read only). Track C.
+
+1d       adjusted official bars + Drishti's provisional bar of today (as /api/chart).
+15m, 1h  Prajna ohlcv_bar of that timeframe (latest fetch per bar), then Drishti's recorded 1m
+         bars (Parquet, then the live snapshot) for the days after Prajna's last session,
+         aggregated on the 09:15 IST grid.
+1m, 5m   Prajna ohlcv_bar 1m for warm-up, then the recorded 1m bars and the live snapshot.
+Intraday bars are as the vendor served them: NOT split/bonus adjusted. The recorder starts at
+09:21 before the switch, so its first 15m/1h bar of a day is partial.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import time
+from pathlib import Path
+from urllib.parse import quote
+
+import numpy as np
+import pandas as pd
+from sqlalchemy import text
+
+from drishti.core.clock import IST, today
+from drishti.core.config import get_settings
+from drishti.core.db import prajna_sessionmaker, sessionmaker
+from drishti.data import bars
+from drishti.data.holidays import SHORT_SESSIONS
+
+TFS = ("1m", "5m", "15m", "1h", "1d")
+MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60}
+SESSIONS = {"1m": 3, "5m": 10, "15m": 60, "1h": 250, "1d": 750}   # sessions (1d: calendar days)
+LIVE_DIR = Path("/dev/shm/drishti_live")
+IST_S, OPEN_S = 19800, 9 * 3600 + 15 * 60                           # IST offset; 09:15 IST
+COLS = ["time", "session_date", "open", "high", "low", "close", "volume", "vwap"]
+TTL_S = 30.0
+_cache: dict[tuple[str, str], tuple[float, tuple[pd.DataFrame, list[dict]]]] = {}
+
+
+def bars_1m_dir() -> Path:
+    return get_settings().DRISHTI_DATA_DIR / "bars_1m"
+
+
+def bucket(t: np.ndarray | pd.Series, minutes: int):
+    """Start (epoch s) of the `minutes` bar on the 09:15 IST grid that holds epoch second t."""
+    m = minutes * 60
+    return (t + IST_S - OPEN_S) // m * m + OPEN_S - IST_S
+
+
+def session_of(t: pd.Series) -> pd.Series:
+    return pd.to_datetime(t + IST_S, unit="s").dt.date
+
+
+def aggregate(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
+    """1m bars (COLS, sorted by time) -> `minutes` bars; vwap = the last minute's."""
+    if minutes == 1 or df.empty:
+        return df.reset_index(drop=True)
+    g = df.assign(time=bucket(df.time, minutes)).groupby("time", sort=True)
+    out = g.agg(session_date=("session_date", "first"), open=("open", "first"),
+                high=("high", "max"), low=("low", "min"), close=("close", "last"),
+                volume=("volume", "sum"), vwap=("vwap", "last")).reset_index()
+    return out[COLS]
+
+
+def _frame(rows, src: str) -> pd.DataFrame:
+    df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "volume", "vwap"])
+    if df.empty:
+        return pd.DataFrame(columns=COLS + ["src"])
+    df["time"] = df.time.astype("int64")
+    for c in ("open", "high", "low", "close", "volume", "vwap"):
+        df[c] = df[c].astype(float)
+    df["session_date"] = session_of(df.time)
+    df["src"] = src
+    return df[COLS + ["src"]]
+
+
+def recorded_1m(key: str, after: _dt.date | None) -> pd.DataFrame:
+    """Drishti's 1m Parquet of the days after `after`."""
+    root, parts = bars_1m_dir(), []
+    if root.is_dir():
+        for d in sorted(p for p in root.iterdir() if p.is_dir()):
+            try:
+                day = _dt.date.fromisoformat(d.name)
+            except ValueError:
+                continue
+            if after is not None and day <= after:
+                continue
+            for f in sorted(d.glob("*.parquet")):
+                x = pd.read_parquet(f, filters=[("instrument_key", "==", key)])
+                if not x.empty:
+                    parts.append(x)
+    if not parts:
+        return _frame([], "drishti_1m")
+    x = pd.concat(parts, ignore_index=True)
+    return _frame(x[["time", "open", "high", "low", "close", "volume", "vwap"]].to_numpy(),
+                  "drishti_1m")
+
+
+def live_1m(key: str) -> pd.DataFrame:
+    """Today's 1m candles from the recorder's live snapshot (LIVE VIEW)."""
+    try:
+        c = json.loads((LIVE_DIR / "c1m" / f"{quote(key, safe='')}.json").read_text())
+    except (OSError, ValueError):
+        c = []
+    return _frame([[b["time"], b["open"], b["high"], b["low"], b["close"], b["volume"],
+                    b.get("vwap")] for b in c], "live")
+
+
+def merge(*parts: pd.DataFrame) -> pd.DataFrame:
+    """Concatenate 1m (or same-timeframe) frames; on the same time the later part wins."""
+    parts = [p for p in parts if not p.empty]
+    if not parts:
+        return pd.DataFrame(columns=COLS + ["src"])
+    df = pd.concat(parts, ignore_index=True)
+    return df.drop_duplicates("time", keep="last").sort_values("time").reset_index(drop=True)
+
+
+def sources(df: pd.DataFrame, names: dict[str, str]) -> list[dict]:
+    out = []
+    for src, name in names.items():
+        sub = df[df.src == src] if "src" in df else df.iloc[:0]
+        last = None
+        if not sub.empty:
+            t = sub.time.iloc[-1]
+            last = str(t) if not isinstance(t, (int, np.integer)) else \
+                _dt.datetime.fromtimestamp(int(t), IST).strftime("%Y-%m-%d %H:%M")
+        out.append({"source": name, "bars": int(len(sub)), "last_time": last})
+    return out
+
+
+async def _prajna(ps, key: str, tf: str, n_sessions: int) -> pd.DataFrame:
+    d0 = today() - _dt.timedelta(days=int(n_sessions * 1.5) + 7)
+    rows = (await ps.execute(text("""
+        select distinct on (bar_start_utc) extract(epoch from bar_start_utc)::bigint,
+               open, high, low, close, volume, null
+        from ohlcv_bar where instrument_key = :k and timeframe = :tf and session_date > :d0
+        order by bar_start_utc, fetched_at desc"""), {"k": key, "tf": tf, "d0": d0})).all()
+    df = _frame(rows, "prajna")
+    df = df[~df.session_date.isin(SHORT_SESSIONS)]
+    keep = sorted(df.session_date.unique())[-n_sessions:]
+    return df[df.session_date.isin(keep)]
+
+
+async def _load_intraday(key: str, tf: str) -> tuple[pd.DataFrame, list[dict]]:
+    n = SESSIONS[tf]
+    native = tf in ("15m", "1h")
+    async with prajna_sessionmaker()() as ps:
+        pj = await _prajna(ps, key, tf if native else "1m", n)
+    last = pj.session_date.max() if not pj.empty else None
+    live = live_1m(key)
+    if last is not None:
+        live = live[live.session_date > last]
+    stored = recorded_1m(key, last)
+    rec = merge(stored, live)
+    names = {"prajna": f"Prajna ohlcv_bar {tf if native else '1m'}",
+             "drishti_1m": "Drishti recorded 1m (Parquet)", "live": "Drishti live snapshot"}
+    src = sources(pd.concat([pj, stored, live]), names)
+    m = MINUTES[tf]
+    if native:
+        df = merge(pj, aggregate(rec.drop(columns="src"), m).assign(src="drishti"))
+    else:
+        df = merge(pj, rec)
+        if m > 1:
+            df = aggregate(df.drop(columns="src"), m).assign(src="mixed")
+    df = df[df.session_date.isin(sorted(df.session_date.unique())[-n:])]
+    return df.reset_index(drop=True), src
+
+
+async def _load_1d(key: str) -> tuple[pd.DataFrame, list[dict]]:
+    day = today()
+    async with sessionmaker()() as s, prajna_sessionmaker()() as ps:
+        df = await bars.official(ps, day, SESSIONS["1d"], keys=[key])
+        prov = await bars.provisional(s, day)
+    prov = prov[prov.instrument_key == key]
+    df = df.assign(src="official")
+    if not prov.empty and (df.empty or df.session_date.max() < day):
+        df = pd.concat([df, prov.assign(src="provisional")[df.columns] if not df.empty
+                        else prov.assign(src="provisional")], ignore_index=True)
+    if df.empty:
+        return pd.DataFrame(columns=COLS + ["src"]), []
+    df = df.sort_values("session_date").reset_index(drop=True)
+    df["time"] = df.session_date.astype(str)
+    df["vwap"] = np.nan
+    src = sources(df, {"official": "Prajna official 1d (adjusted)",
+                       "provisional": "Drishti provisional 1d (EOD quote)"})
+    return df[COLS + ["src"]], src
+
+
+async def load(key: str, tf: str) -> tuple[pd.DataFrame, list[dict]]:
+    """(bars with COLS + src, oldest first; sources with their last bar time). Cached TTL_S."""
+    hit = _cache.get((key, tf))
+    if hit and time.monotonic() - hit[0] < TTL_S:
+        return hit[1]
+    out = await (_load_1d(key) if tf == "1d" else _load_intraday(key, tf))
+    _cache[(key, tf)] = (time.monotonic(), out)
+    if len(_cache) > 256:
+        _cache.pop(next(iter(_cache)))
+    return out
