@@ -24,6 +24,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from drishti.data.holidays import SHORT_SESSIONS
+from drishti.features.levels import wilder_atr, zones
 
 TOL = 0.001                     # spec section 1: > 0.1 % in any OHLC field = BAR_REVISED
 NEAR_ATR = 0.5                  # "near a boundary" = within 0.5 ATR
@@ -60,39 +61,6 @@ async def official_history(ps, day: _dt.date, keys: list[str], days: int = 420) 
     return df
 
 
-def wilder_atr(h: np.ndarray, lo: np.ndarray, c: np.ndarray, n: int = 14) -> float:
-    pc = np.r_[c[0], c[:-1]]
-    tr = np.maximum(h - lo, np.maximum(abs(h - pc), abs(lo - pc)))
-    atr = tr[:n].mean()
-    for x in tr[n:]:
-        atr = (atr * (n - 1) + x) / n
-    return float(atr)
-
-
-def zones(h: np.ndarray, lo: np.ndarray, atr: float, w: int = 5) -> list[tuple[float, float]]:
-    """(band bottom, band top) of S/R zones: pivots of the last 250 sessions known by T (a pivot
-    at i is known at i + w), clustered greedily within 0.5 ATR, >= 2 pivots >= 10 sessions apart;
-    band = mean +- 0.25 ATR (spec section 3)."""
-    n = len(h)
-    piv = []
-    for i in range(max(w, n - 250), n - w):
-        if h[i] == h[i - w:i + w + 1].max():
-            piv.append((h[i], i))
-        if lo[i] == lo[i - w:i + w + 1].min():
-            piv.append((lo[i], i))
-    piv.sort()
-    out, cl = [], []
-    for p in piv + [(np.inf, 0)]:
-        if cl and p[0] - cl[0][0] > 0.5 * atr:
-            idx = [i for _, i in cl]
-            if len(cl) >= 2 and max(idx) - min(idx) >= 10:
-                m = float(np.mean([x for x, _ in cl]))
-                out.append((m - 0.25 * atr, m + 0.25 * atr))
-            cl = []
-        cl.append(p)
-    return out
-
-
 def boundaries(hist: pd.DataFrame, bars: list[dict]) -> list[dict] | None:
     """Signed distances, in ATR, of each bar of T in `bars` (provisional, official) to the rule
     boundaries of S1a/S1b/S2/S3; `hist` = the stock's official bars before T. The levels (ATR,
@@ -109,8 +77,8 @@ def boundaries(hist: pd.DataFrame, bars: list[dict]) -> list[dict] | None:
     h, lo = np.r_[hist.high.to_numpy(), b0["high"]], np.r_[hist.low.to_numpy(), b0["low"]]
     hi52 = h[-250:].max()
     zs = zones(h, lo, atr)
-    tops = np.array([t for _, t in zs])
-    bots = np.array([b for b, _ in zs])
+    tops = np.array([z["top"] for z in zs])
+    bots = np.array([z["bottom"] for z in zs])
     out = []
     for b in bars:
         cc = np.r_[c, b["close"]]

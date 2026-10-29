@@ -1,0 +1,41 @@
+:root {
+  --bg: #ffffff; --fg: #1a1d21; --muted: #667085; --line: #e4e7ec; --card: #f8f9fb;
+  --up: #12805c; --down: #c0362c; --accent: #2b59c3; --warn: #b54708;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1115; --fg: #e6e8eb; --muted: #98a2b3; --line: #262a31; --card: #161a20;
+          --up: #3ccf91; --down: #f0706a; --accent: #7aa2ff; --warn: #f5a524; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header.top { display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); }
+header.top .brand { font-weight: 700; letter-spacing: .02em; }
+header.top .paper { font-size: 11px; padding: 2px 6px; border: 1px solid var(--warn);
+  color: var(--warn); border-radius: 4px; }
+main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.muted { color: var(--muted); }
+.pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 12px;
+  border: 1px solid var(--line); }
+.pill.on { color: var(--up); border-color: var(--up); }
+.pill.off { color: var(--down); border-color: var(--down); }
+.pill.warn { color: var(--warn); border-color: var(--warn); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; position: sticky; top: 0; background: var(--bg); }
+td.num, th.num { text-align: right; }
+.scroll { overflow-x: auto; }
+input, select, button { font: inherit; color: var(--fg); background: var(--card);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+label.tog { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; }
+.search { position: relative; }
+.search ul { position: absolute; z-index: 5; list-style: none; margin: 2px 0 0; padding: 4px 0;
+  background: var(--card); border: 1px solid var(--line); border-radius: 6px; min-width: 280px; }
+.search li { padding: 4px 10px; cursor: pointer; }
+.search li:hover { background: var(--line); }
+pre { white-space: pre-wrap; word-break: break-word; }
