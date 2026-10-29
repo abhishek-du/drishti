@@ -35,7 +35,7 @@ def flags(df: pd.DataFrame, at_support: pd.Series | None = None, by: str | None 
     f["doji"] = (B <= 0.1 * Rg) & (Rg > 0)
     f["dragonfly_doji"] = f.doji & (Uw <= 0.1 * Rg)
     f["gravestone_doji"] = f.doji & (Lw <= 0.1 * Rg)
-    hammer_shape = small & (Lw >= 2 * B) & (Uw <= B) & (bot >= lo + 2 / 3 * Rg) & (Rg > 0)
+    hammer_shape = shape_hammer(o, h, lo, c, a)
     inv_shape = small & (Uw >= 2 * B) & (Lw <= B) & (top <= lo + 1 / 3 * Rg) & (Rg > 0)
     f["hammer"] = hammer_shape & (fall3 | sup)
     f["inverted_hammer"] = inv_shape & fall3
@@ -75,6 +75,26 @@ def flags(df: pd.DataFrame, at_support: pd.Series | None = None, by: str | None 
                           & p(green & small, 1) & p(green & small, 2) & p(green & small, 3)
                           & inside1(1) & inside1(2) & inside1(3))
     return f[list(FLAGS)].fillna(False).astype(bool)
+
+
+def shape_hammer(o, h, lo, c, a) -> pd.Series:
+    """The hammer's shape without its location rule: small body (B <= 0.3 Rg), Lw >= 2B,
+    Uw <= B, body in the top third of the range (spec section 4). `a` (ATR) is unused by the
+    shape and kept for a uniform signature."""
+    B, Rg = (c - o).abs(), h - lo
+    top = pd.concat([o, c], axis=1).max(axis=1)
+    bot = pd.concat([o, c], axis=1).min(axis=1)
+    return (B <= 0.3 * Rg) & ((bot - lo) >= 2 * B) & ((h - top) <= B) \
+        & (bot >= lo + 2 / 3 * Rg) & (Rg > 0)
+
+
+def lower_closes(c: pd.Series, n: int = 3) -> pd.Series:
+    """>= n consecutive lower closes before the bar (one stock): c[t-1] < c[t-2] < ... <
+    c[t-n-1], the hammer's "after >= 3 sessions of lower closes"."""
+    ok = pd.Series(True, index=c.index)
+    for k in range(1, n + 1):
+        ok &= c.shift(k) < c.shift(k + 1)
+    return ok.fillna(False).astype(bool)
 
 
 def bullish_candle(df: pd.DataFrame, f: pd.DataFrame) -> pd.Series:
