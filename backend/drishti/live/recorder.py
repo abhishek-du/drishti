@@ -170,7 +170,7 @@ class Recorder:
 
     async def session(self, url: str) -> None:
         from websockets.asyncio.client import connect
-        async with connect(url, open_timeout=20, ping_interval=10, ping_timeout=10,
+        async with connect(url, open_timeout=20, ping_interval=20, ping_timeout=20,
                            max_size=2 ** 24, compression=None) as ws:
             self.h["connections"] += 1
             self.health(state="connected")
