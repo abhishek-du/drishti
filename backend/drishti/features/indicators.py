@@ -86,3 +86,88 @@ def rs_score(mr6: pd.Series, mr12: pd.Series) -> pd.Series:
     z = lambda s: (s - s.mean()) / s.std(ddof=0)  # noqa: E731
     zz = 0.5 * z(mr6) + 0.5 * z(mr12)
     return pd.Series(np.where(zz >= 0, 1 + zz, 1 / (1 - zz)), index=zz.index)
+
+
+def bollinger(df: pd.DataFrame, by: str | None = None, n: int = 20, k: float = 2.0
+              ) -> pd.DataFrame:
+    """Bollinger bands: SMA(n) of close +- k population standard deviations (ddof 0)."""
+    g, c = _grp(df, by), df.close
+    mid = roll(c, g, n, "mean")
+    sd = c.groupby(g.to_numpy()).rolling(n, min_periods=n).std(ddof=0) \
+        .reset_index(level=0, drop=True).reindex(c.index)
+    return pd.DataFrame({"bb_mid": mid, "bb_up": mid + k * sd, "bb_lo": mid - k * sd},
+                        index=df.index)
+
+
+def macd(df: pd.DataFrame, by: str | None = None, fast: int = 12, slow: int = 26,
+         signal: int = 9) -> pd.DataFrame:
+    """MACD = EMA(fast) - EMA(slow) of close, its EMA(signal), and the histogram (EMAs as
+    `ema`: span, adjust=False, min_periods = span)."""
+    g = _grp(df, by)
+    m = ema(df.close, g, fast) - ema(df.close, g, slow)
+    s = ema(m, g, signal)
+    return pd.DataFrame({"macd": m, "macd_signal": s, "macd_hist": m - s}, index=df.index)
+
+
+def vwap(df: pd.DataFrame, by: str | None = None) -> pd.Series:
+    """Session VWAP of the typical price (high + low + close) / 3, reset per session_date (and
+    per stock). On daily bars it is the bar's typical price; it is meant for intraday bars."""
+    keys = [df[by], df.session_date] if by else [df.session_date]
+    tp = (df.high + df.low + df.close) / 3
+    pv = (tp * df.volume).groupby(keys).cumsum()
+    v = df.volume.groupby(keys).cumsum()
+    return pv / v.where(v > 0)
+
+
+def extra(df: pd.DataFrame, by: str | None = None) -> pd.DataFrame:
+    """The f1 momentum/volatility columns beyond `basic` (spec section 9): returns, Bollinger
+    20/2 position and bandwidth percentile (250 sessions)."""
+    g, c = _grp(df, by), df.close
+    out = pd.DataFrame(index=df.index)
+    for k in (1, 5, 20, 60):
+        out[f"ret{k}"] = c / shift(c, g, k) - 1
+    bb = bollinger(df, by)
+    w = bb.bb_up - bb.bb_lo
+    out["bb_pos"] = (c - bb.bb_lo) / w.replace(0, np.nan)
+    bw = w / bb.bb_mid
+    out["bb_bw_pct"] = bw.groupby(g.to_numpy()).transform(
+        lambda s: s.rolling(250, min_periods=60).rank(pct=True))
+    return out
+
+
+def trend_class(close, sma50, sma200, ph1, ph2, pl1, pl2) -> np.ndarray:
+    """Spec section 3: UP (1) when close > SMA50 > SMA200 and the last two pivot highs and pivot
+    lows are rising (ph1/pl1 = latest known, ph2/pl2 = the one before); DOWN (-1) on the
+    mirror; else SIDE (0)."""
+    up = (close > sma50) & (sma50 > sma200) & (ph1 > ph2) & (pl1 > pl2)
+    dn = (close < sma50) & (sma50 < sma200) & (ph1 < ph2) & (pl1 < pl2)
+    return np.where(up, 1, np.where(dn, -1, 0))
+
+
+def regime(idx: pd.DataFrame) -> pd.DataFrame:
+    """Per session: spec_gate (Nifty 500 close > its SMA200, spec section 5 / SC4) and the VIX
+    state (SC4: normal < 20; spike >= 25 or 5-session change >= +20 %; else neither).
+    idx: index_key, session_date, close (short sessions already dropped; one row per day)."""
+    def series(k):
+        s = idx[idx.index_key == k].sort_values("session_date")
+        return s.drop_duplicates("session_date", keep="last").set_index("session_date").close
+    n5, vix = series("NSE_INDEX|Nifty 500"), series("NSE_INDEX|India VIX")
+    out = pd.DataFrame({"n500": n5, "n500_sma200": n5.rolling(200, min_periods=200).mean()})
+    out["n500_vs_sma200"] = out.n500 / out.n500_sma200 - 1
+    out["spec_gate"] = out.n500 > out.n500_sma200
+    v = vix.reindex(out.index)
+    out["vix"], out["vix_chg5"] = v, v / v.shift(5) - 1
+    out["vix_spike"] = (v >= 25) | (out.vix_chg5 >= 0.20)
+    out["vix_normal"] = v < 20
+    return out
+
+
+def rs_daily(df: pd.DataFrame, date: str = "session_date") -> pd.DataFrame:
+    """RS score per session on the rows given (the eligible universe), its rank percentile and
+    RS_top (top 25 %, as Scout: score >= the 0.75 quantile)."""
+    sc = df.groupby(date, sort=False, group_keys=False)[["mr6", "mr12"]].apply(
+        lambda x: rs_score(x.mr6, x.mr12))
+    sc = sc.where(df.mr6.notna() & df.mr12.notna())
+    pct = sc.groupby(df[date]).rank(pct=True)
+    cut = sc.groupby(df[date]).transform(lambda s: s.quantile(0.75))
+    return pd.DataFrame({"rs_score": sc, "rs_pct": pct, "rs_top": sc >= cut}, index=df.index)
