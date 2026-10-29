@@ -105,3 +105,29 @@ Only `spec_gate` will ever gate a signal.
 **The frozen spec's universe (section 2) does not list a price-band exclusion.** Signals, labels and the model universe are therefore **not** changed by this; adding the exclusion there would be a rule change, `drishti-swing-v2`.
 
 Delivery % stays out: there is no source.
+
+## SC6 (PROPOSED 2026-10-29, the user decides before the P6 freeze): `BAND_VETO`
+
+**Check (2026-10-29).** Circuit limits come from the live Upstox quote. History has no source for them, so this is one date only; the daily count builds up from the 15:40 snapshot, and it is the Scout funnel's `eligible − band_ok`. The spec section 2 universe was built on the 10-28 bars:
+
+| Set | Names | 2 % band | 5 % band | 10 % | 20 % | Unknown |
+|---|---|---|---|---|---|---|
+| Eligible (after ASM/GSM) | 472 | 0 | **2** (KRN, SMLMAH) | 232 | 238 | 0 |
+| Top 500 before ASM/GSM | 500 | 0 | 3 (+ MTARTECH, which is in ASM) | 238 | 259 | 0 |
+
+So about 0.4 % of the universe: small, but not zero. A 2 % or 5 % band name can lock at its circuit. A stop then cannot fill, which is doctrine 9 (no position without protection you can verify).
+
+**Proposal:**
+- The Risk Manager (P5) vetoes the paper order of a confirmed event when the stock is in a 2 % or 5 % band on T (15:40 snapshot). Reason: `BAND_VETO`.
+- An unknown band is not vetoed; it is logged as `BAND_UNKNOWN`.
+- The forward report counts `BAND_VETO` separately from the other order outcomes (PREREG_M1 "order counts with reason").
+
+**Why I'd record it as a clarification (SC), not v2:**
+- PREREG_M1 H1–H3 are measured on the labels of closed (b) and confirmed events, not on paper fills.
+- A confirmed event already "becomes a paper order (subject to the risk rules)", so the veto is one more risk rule at execution, like the open-risk and sector caps.
+- Neither the event set nor the hypotheses change.
+- The paper P&L does change. That is why the vetoed orders are counted and reported separately.
+
+**If the user prefers v2:** it would be bundled with whatever the pre-P6 power check decides (`DESIGN.md`), so that there is only one version change before the freeze.
+
+**Status: NOT ADOPTED.** No code, no rule. The decision is recorded in `FREEZE_M1.md` at P6.
