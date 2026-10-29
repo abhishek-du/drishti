@@ -237,3 +237,10 @@ After Tiers 1–2 plus 3.2 and 3.3, /windows has ~66 GB free, which is just enou
   - 3.3: the 10-27 full dump, after the final frozen full dump is verified there.
 - **Not touched:** 3.4 (revisit after P6) and **3.5 showiq (never)**. 3.6–3.8 are the user's own decisions.
 - **Ticks:** the planned store is `/home/cis/drishti_ticks` on root, after 3.1. The user approves it when ticks are enabled.
+
+## Done 2026-10-29: Tier 3.2 + 3.3 (user decision: delete now, without the second location)
+
+- **Deleted** (`rm --` on an explicit printed list of 30 names): 15 Prajna dumps + their 15 `.sha256` files. **31.374 GB freed on /windows.**
+- **Kept:** `irreplaceable_20261029/` (all 6 sha256 re-verified OK), `drishti_*`, `globals_*`.
+- **`df -h` after:** root 62 GB free (83 %); **/windows 63 GB free (7 %)**.
+- **Consequence (DEVIATIONS D3):** there is no full Prajna backup until the mandatory final frozen dump on the switch night. That dump is required before 3.1 or any other Prajna change.

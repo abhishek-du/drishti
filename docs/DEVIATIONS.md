@@ -30,3 +30,30 @@ Each file has a `.sha256` next to it.
 - The user asked for a warning when the newest ASM/GSM file is older than **7 calendar days** (`drishti/data/manual.py: surveillance_freshness`).
 - This is stricter, and it is an ops warning only: no trading rule changes, so the spec is unchanged.
 - Scout records the freshness dict (file dates, age, status) in every watchlist run, and sends a Telegram warning once P5 exists.
+
+## D3 (2026-10-29): no full Prajna backup until the switch-night final dump
+
+**Rule affected:** keep a verified backup before any change. Prajna's own rule is "Back up before any production migration".
+
+**What happened.** By explicit user decision on 2026-10-29 (DISK_CLEANUP 3.2 + 3.3, without the second location), all 15 old Prajna dumps in `/windows/prajna_archive` and their `.sha256` files were deleted: **30 files, 31.374 GB freed on /windows**. These were:
+- 13 pre-migration dumps from 2026-09-25/28/29 (0007–0015);
+- the 10-16 dump;
+- the 10-27 16:25 and **10-27 18:54 full dumps**.
+
+The user accepted in writing that **there is no full backup of the `prajna` database** from now until the final frozen dump on the switch night.
+
+**What still exists:**
+- `irreplaceable_20261029/`: CA, basis/observations, news + news AI + results events, pre-open recordings, raw vendor payloads. All 6 sha256 checks re-verified OK after the delete.
+- The Drishti and globals backups.
+
+**What is lost if the `prajna` volume fails before the switch:**
+- the bars (re-fetchable from Upstox, slowly);
+- the training/feature tables (Prajna-derived, regenerable only by re-running Prajna);
+- the experiment outputs.
+
+**Binding from now on:**
+1. **No change of any kind to the `prajna` database before the switch-night final dump.** That covers migrations, DROPs (DISK_CLEANUP 3.1), VACUUM FULL and role or setting changes. Prajna's own running jobs continue as before.
+2. **The final full `pg_dump -Fc` of the frozen `prajna` database is mandatory on the switch night (2026-11-20).**
+   - It comes after the cron diff, before the delta copy's verification is signed off, and before 3.1 or any other Prajna change.
+   - It gets a sha256 and a `pg_restore -l` TOC check. A test restore into a scratch database is also done if space allows.
+   - It is stored on /windows (63 GB free after this delete; the 10-27 full dump was 10.1 GB) and on the second location once that exists.

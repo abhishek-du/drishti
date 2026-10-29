@@ -183,7 +183,7 @@ diff ~/crontab_before_B.txt ~/crontab_B.txt     # review
 4. **Switch day S** (a trading day; proposed **Friday 2026-11-13**, D6):
    1. 16:05–~19:15: Prajna's close job runs as usual (intraday of S).
    2. **~19:30:** the user installs the cron diff (6.1); the dashboard is stopped; the news collector is stopped if D2 = stop.
-   3. 20:30: the **delta copy** (rows with `fetched_at` after the first copy) and its verification. **Prajna is frozen from here.**
+   3. **20:30: the mandatory final full `pg_dump -Fc` of the frozen `prajna` DB** (DEVIATIONS D3), on /windows, with sha256 and a `pg_restore -l` check (plus a test restore if space allows). Then the **delta copy** (rows with `fetched_at` after the first copy) and its verification. **Prajna is frozen from here**, and nothing in it changes before that dump is verified.
    4. Prajna's token of S (06:30 login) expires at ~03:30 Saturday, so no two Upstox owners overlap.
 5. **S+1 (Saturday):**
    1. 06:10 Drishti's first own login;
