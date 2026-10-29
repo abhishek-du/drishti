@@ -104,3 +104,51 @@ def test_login_step_error_does_not_echo_the_body(env):
     with pytest.raises(login.LoginStepError) as e:
         login.ensure(lambda t: False, lambda: Bad(), lambda *a, **k: None)
     assert "123456" not in str(e.value) and "UDAPI1" in str(e.value)
+
+
+def test_master_diff_events():
+    from drishti.data import master
+    old = {"A": {"trading_symbol": "AAA", "instrument_type": "EQ"},
+           "B": {"trading_symbol": "BBB", "instrument_type": "EQ"}}
+    new = {"A": {"trading_symbol": "AAA2", "instrument_type": "BE"},
+           "C": {"trading_symbol": "CCC", "instrument_type": "SM"}}
+    ev = {k: (e, ch) for k, e, _, ch in master.diff(old, new)}
+    assert ev["A"] == ("CHANGED", {"trading_symbol": ["AAA", "AAA2"], "instrument_type": ["EQ", "BE"]})
+    assert ev["B"][0] == "REMOVED" and ev["C"][0] == "ADDED"
+    assert master.diff(new, new) == []
+
+
+def test_board_meetings_parse_and_freshness_in_test_db():
+    import asyncio
+    import datetime as _dt
+    import uuid
+
+    from sqlalchemy import text
+
+    from drishti.core import migrate
+    from drishti.core.db import engine, sessionmaker
+    from drishti.data import manual
+    raw = ('"SYMBOL","COMPANY NAME","PURPOSE","BOARD MEETING DATE","DETAILS"\n'
+           '"ABC","Abc Ltd","Financial Results","05-Nov-2026","To consider quarterly results"\n'
+           '"XYZ","Xyz Ltd","Fund Raising","06-Nov-2026","Issue of NCDs"\n').encode()
+    assert manual.kind_of(manual.Path("board_meetings_2026-11-02.csv")) == "BOARD_MEETINGS"
+    r = manual.parse("BOARD_MEETINGS", raw)
+    assert [(x["symbol"], x["event_date"], x["extra"]["results"]) for x in r] == [
+        ("ABC", _dt.date(2026, 11, 5), True), ("XYZ", _dt.date(2026, 11, 6), False)]
+
+    async def go():
+        await migrate.main(False)
+        rid = uuid.uuid4()
+        async with sessionmaker()() as s:
+            await s.execute(text("insert into run(run_id, kind, code_sha) values (:r,'TEST','x')"),
+                            {"r": rid})
+            await s.execute(text("""insert into manual_file(run_id, kind, path, file_date, sha256,
+                row_count) values (:r, 'BOARD_MEETINGS', 'x', '2032-03-01', :h, 2)"""),
+                {"r": rid, "h": uuid.uuid4().hex * 2})
+            await s.commit()
+            f = await manual.board_meetings_freshness(s, _dt.date(2032, 3, 5))
+            assert f["BOARD_MEETINGS"]["status"] == "OK" and not f["warning"]
+            f = await manual.board_meetings_freshness(s, _dt.date(2032, 3, 6))
+            assert f["BOARD_MEETINGS"]["status"] == "STALE" and f["warning"]
+        await engine().dispose()
+    asyncio.run(go())

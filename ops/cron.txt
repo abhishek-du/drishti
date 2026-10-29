@@ -8,3 +8,5 @@
 30 9 * * 2-6   /home/cis/windows/drishti/ops/runbooks/drishti_job.sh barcheck
 # Scout watchlist of today (P2), after the 15:40 provisional snapshot
 30 19 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scout
+# Drishti instrument master (P1c; Upstox public file, no API budget, no token)
+20 6 * * *     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh master

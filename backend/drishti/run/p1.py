@@ -5,6 +5,7 @@
     .venv/bin/python -m drishti.run.p1 manual
     .venv/bin/python -m drishti.run.p1 eod            # after 15:35 IST on a trading day
     .venv/bin/python -m drishti.run.p1 barcheck [--date 2026-10-28]   # T+1 after 09:00
+    .venv/bin/python -m drishti.run.p1 master        # Upstox public NSE master (06:20)
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from drishti.core import runlog
 from drishti.core.clock import IST, now, today
 from drishti.core.config import BACKEND, get_settings
 from drishti.core.db import prajna_sessionmaker, sessionmaker
-from drishti.data import bar_check, eod_quotes, holidays, indices, manual
+from drishti.data import bar_check, eod_quotes, holidays, indices, manual, master
 
 
 async def trading_day(s, d: _dt.date) -> bool:
@@ -110,6 +111,12 @@ async def main(cmd: str, args: list[str]) -> dict:
                 api = Upstox()
                 return await eod(s, rid, t.date(), keys, eod_quotes.fetch(api, keys),
                                  eod_quotes.fetch(api, list(indices.INDEX_KEYS)))
+            elif cmd == "master":
+                raw = master.download()
+                total, kept = master.parse(raw)
+                out = await master.store(s, rid, raw, total, kept)
+                async with prajna_sessionmaker()() as ps:
+                    out["vs_prajna"] = await master.compare_with_prajna(s, ps)
             elif cmd == "barcheck":
                 out = await barcheck(s, args)
             else:

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 
+RESULTS = re.compile(r"financial\s+results?|\bresults\b", re.I)
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
 
@@ -23,7 +24,8 @@ def kind_of(p: Path) -> str | None:
     n = p.name.lower()
     for pat, k in ((r"^asm", "ASM"), (r"^gsm", "GSM"), (r"delist", "DELISTED"),
                    (r"^equity_l", "EQUITY_L"), (r"symbolchange", "SYMBOL_CHANGE"),
-                   (r"namechange", "NAME_CHANGE"), (r"contract_note", "CONTRACT_NOTE")):
+                   (r"namechange", "NAME_CHANGE"), (r"contract_note", "CONTRACT_NOTE"),
+                   (r"board_?meeting", "BOARD_MEETINGS")):
         if re.search(pat, n):
             return k
     return None
@@ -109,6 +111,18 @@ def parse(kind: str, raw: bytes) -> list[dict]:
                         "event_date": _d(g("EFFECTIVE DATE")),
                         "extra": {"old_symbol": g("OLD SYMBOL"),
                                   "name": g("NAME OF THE COMPANY")}})
+        elif kind == "BOARD_MEETINGS":
+            # NSE "Board Meetings" export (user download, D2). Header names VERIFY on the first
+            # real file; the date and purpose columns are matched loosely.
+            date_col = next((k for k in r if "MEETING DATE" in k or k in ("BM DATE", "DATE")), "")
+            purpose = g("PURPOSE", "BOARD MEETING PURPOSE", "AGENDA")
+            details = g("DETAILS", "BOARD MEETING DETAILS", "DESCRIPTION")
+            if not (g("SYMBOL") and date_col and r.get(date_col)):
+                continue
+            out.append({"symbol": g("SYMBOL"), "isin": g("ISIN") or None, "stage": purpose,
+                        "event_date": _d(r[date_col].split(" ")[0]),
+                        "extra": {"name": g("COMPANY NAME", "COMPANY"), "details": details[:500],
+                                  "results": bool(RESULTS.search(f"{purpose} {details}"))}})
         elif kind == "NAME_CHANGE":
             out.append({"symbol": g("SYMBOL"), "isin": None, "stage": None,
                         "event_date": _d(g("EFFECTIVE DATE")),
@@ -143,6 +157,31 @@ async def load_dir(s, rid, folder: Path) -> list[dict]:
 
 
 STALE_DAYS = 7          # user 2026-10-28: warn when the newest ASM/GSM file is older than 7 days
+BOARD_STALE_DAYS = 4    # user 2026-10-29 (D2): board-meetings CSV downloaded Mon and Thu
+
+
+async def _fresh(s, on: _dt.date, kinds: tuple[str, ...], stale: int) -> dict:
+    out: dict = {}
+    for k in kinds:
+        d = (await s.execute(text("""select max(file_date) from manual_file
+            where kind = :k and file_date <= :on"""), {"k": k, "on": on})).scalar()
+        age = (on - d).days if d else None
+        out[k] = {"file_date": d, "age_days": age,
+                  "status": "MISSING" if d is None else "STALE" if age > stale else "OK"}
+    out["warning"] = any(out[k]["status"] != "OK" for k in kinds)
+    return out
+
+
+async def board_meetings_freshness(s, on: _dt.date) -> dict:
+    """The newest board-meetings file as of `on`; STALE when older than 4 calendar days. Every
+    consumer of the results calendar (Scout's results flag, the results gate) records this dict;
+    a stale calendar is a warning and the results flag is shown as UNKNOWN, never as 'none'."""
+    import logging
+    out = await _fresh(s, on, ("BOARD_MEETINGS",), BOARD_STALE_DAYS)
+    if out["warning"]:
+        logging.getLogger("drishti.results").warning("board-meetings CSV not fresh: %s",
+                                                     out["BOARD_MEETINGS"])
+    return out
 
 
 async def surveillance_freshness(s, on: _dt.date) -> dict:
