@@ -210,3 +210,27 @@ def test_daily1d_store_keeps_every_fetch_in_test_db():
             assert e[0] == 400 and "UDAPI100011" in e[1]
         await engine().dispose()
     asyncio.run(go())
+
+
+def test_guard_refusal_is_recorded_as_noop_in_test_db(monkeypatch):
+    import asyncio
+
+    from sqlalchemy import text
+
+    from drishti.core import migrate
+    from drishti.core.db import engine, sessionmaker
+    from drishti.data import daily1d
+    from drishti.run import p1
+    monkeypatch.setattr(daily1d, "a_rule_ok", lambda t: False)
+
+    async def go():
+        await migrate.main(False)
+        out = await p1.main("daily1d", ["--limit", "1"])
+        assert out["refused"].startswith("REFUSED: decision A")
+        async with sessionmaker()() as s:
+            st, c = (await s.execute(text("""select e.status, e.counts->>'refused' from run r
+                join run_end e using (run_id) where r.kind = 'P1_DAILY1D'
+                order by r.started_at desc limit 1"""))).one()
+            assert st == "NOOP" and c.startswith("REFUSED")
+        await engine().dispose()
+    asyncio.run(go())
