@@ -252,6 +252,36 @@ web/ (Next.js + lightweight-charts)   ops/ (runbooks + systemd user units)   doc
 4. Mask suspend.
 5. A new Bedrock key (optional, for the Narrator).
 
+## STATUS (user, 2026-10-29): drishti-swing-v1 is NOT taken to the forward test
+
+**P6 (freeze of model #1) and the forward test are ON HOLD** until a research sprint decides on a documented `drishti-swing-v2`.
+
+**What is unchanged:**
+- `drishti-swing-v1` stays frozen as written. It is not edited, and it is not run forward.
+- P1c, the switch to Option B on 2026-11-20 (`SWITCH_TO_B.md`), the live view, the tick recorder, the chart UI and Scout keep going as planned.
+
+**Evidence** (P3/P4 draft by Track B, merged as code at `0c0f327`; the outputs stay as files in `/windows/drishti_data/research/track-b/`). All of it is **SURVIVORSHIP-BIASED, EXPLORATORY**. The replay runs 2020-09-07 → cut-off C = 2026-10-21 on official bars, 10 bps/side base slippage.
+
+- **Rules vs placebo** (set (b), 5,836 events, 2,381 closed):
+  - rules-only net expectancy **−0.100 R**;
+  - seeded random-entry placebo **−0.090 R**: the rules show no edge over random entry;
+  - by strategy: S1a −0.046, S1b −0.326, S2 −0.101, S3 −0.114 R;
+  - it is negative at 5 bps (−0.077) and 20 bps (−0.147), and negative in every year except 2020 (+0.107).
+- **Set (a), all-bar:** −0.129 R (spec_gate ON −0.125, OFF −0.148).
+- **Close-confirm variant (EXPLORATORY):** worse, −0.176 R versus −0.100 for the frozen buy-stop.
+- **Model #1** (LightGBM + isotonic, purged/embargoed walk-forward, 22 folds):
+  - (b) calibrated out-of-fold **AUC 0.505, BSS +0.003**;
+  - (a) calibrated AUC 0.494, BSS −0.004;
+  - no p* gives a positive mean net R.
+- **Pre-P6 power check: FLAG_CURRENT_REGIME_OVER_120.**
+  - spec_gate is OFF today (Nifty 500 21,734.9 < SMA200 22,808.7), so under the current regime the look is **never** reached (SC4 blocks entries).
+  - Historical ON share is 79.2 %, which would take ~69–101 sessions.
+  - 2026 so far has an ON share of 43.9 %.
+
+**Next:**
+- A research sprint, the user's call on scope, ends in either a documented v2 (its own spec, pre-registration and freeze) or no forward test.
+- The forward-start date below is void until then.
+
 ## Option B (user, 2026-10-29): new phase P1c before P3
 
 Prajna stops, and Drishti owns Upstox; see `SWITCH_TO_B.md`. P1c covers:
@@ -277,11 +307,11 @@ The user's decisions D1–D6 are in `SWITCH_TO_B.md`: copy plus an archive, no N
 | **P1c** | 10-29 → 11-12 | Option B ingest, copy, archive |
 | Shadow overlap | sessions 11-12, 13, 16, 17, 18, (19) | Rest of P2 in parallel |
 | **Switch** | Fri 11-20 evening | Drishti-only from Mon 11-23 |
-| P3 | 11-23 → 11-30 | Features, strategies, replay; **pre-P6 power check reported ~11-30** |
-| P4 | 12-01 → 12-07 | Labels, purged CV, LightGBM, calibration |
+| P3 | **done early (draft, Track B, 2026-10-29)** | Features, strategies, replay, scorecards, power check: no edge, flag set (STATUS above) |
+| P4 | **done early (draft, Track B, 2026-10-29)** | Labels, purged CV, LightGBM, calibration: AUC ~0.50 |
 | P5 | 12-08 → 12-11 | Risk Manager (incl. SC6 BAND_VETO), paper trader, SC3 recheck, Narrator, Telegram |
-| P6 | 12-14 → 12-16 | Judge, freeze model #1 (`FREEZE_M1.md`) |
-| **Forward test start** | **Thu 2026-12-17** (first session after the freeze) | Earliest look ≥ 40 sessions ≈ mid-Feb 2027; 120-session cap ≈ early June 2027 (2027 holidays to confirm) |
+| P6 | **ON HOLD** | No freeze of v1; waits for the research sprint / v2 decision |
+| **Forward test start** | **ON HOLD (was Thu 2026-12-17)**: v1 is not taken forward | Earliest look ≥ 40 sessions ≈ mid-Feb 2027; 120-session cap ≈ early June 2027 (2027 holidays to confirm) |
 
 The forward-start date also depends on the pre-P6 power check. If the projection under the current regime is beyond 120 sessions, the user decides between "start as frozen" and a documented v2 before the freeze.
 
