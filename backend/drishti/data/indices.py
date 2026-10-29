@@ -32,11 +32,11 @@ def fetch_history(api, key: str, frm: _dt.date, to: _dt.date) -> list[dict]:
     return parse_candles((d.get("data") or {}).get("candles") or [])
 
 
-async def store(s, rid, key: str, rows: list[dict], source: str) -> int:
+async def store(s, rid, rows: list[dict], source: str) -> int:
     for r in rows:
         await s.execute(text("""insert into index_bar(run_id, index_key, session_date, open, high,
-            low, close, source) values (:run, :k, :session_date, :open, :high, :low, :close,
-            :src)"""), {"run": rid, "k": key, "src": source, **r})
+            low, close, source) values (:run, :index_key, :session_date, :open, :high, :low,
+            :close, :src)"""), {"run": rid, "src": source, **r})
     await s.commit()
     return len(rows)
 

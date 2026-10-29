@@ -190,8 +190,12 @@ def test_eod_skips_a_day_without_trades_in_test_db():
 
             rid = await runlog.start(s, "P1_EOD", day)
             rows = [q(k, (2031, 3, 4)) for k in "ABC"] + [q("D", (2031, 3, 3))]
-            out = await p1.eod(s, rid, day, list("ABCD"), rows)
-            assert out["stored"] == 3 and out["stale"] == 1
+            idx = [q("NSE_INDEX|Nifty 500", (2031, 3, 4)), q("NSE_INDEX|Nifty 50", (2031, 3, 3))]
+            out = await p1.eod(s, rid, day, list("ABCD"), rows, idx)
+            assert out["stored"] == 3 and out["stale"] == 1 and out["index_stored"] == 1
+            ib = (await s.execute(text("select index_key, source from index_bar where run_id = :r"),
+                                  {"r": rid})).all()
+            assert [tuple(x) for x in ib] == [("NSE_INDEX|Nifty 500", "UPSTOX_QUOTE")]
             keys = (await s.execute(text("select instrument_key from eod_quote where run_id = :r "
                                          "order by 1"), {"r": rid})).scalars().all()
             assert keys == ["A", "B", "C"]

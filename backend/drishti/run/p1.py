@@ -27,9 +27,12 @@ async def trading_day(s, d: _dt.date) -> bool:
     return holidays.is_session(d, await holidays.latest(s, d))
 
 
-async def eod(s, rid, day: _dt.date, keys: list[str], rows: list[dict]) -> dict:
+async def eod(s, rid, day: _dt.date, keys: list[str], rows: list[dict],
+              index_rows: list[dict] = ()) -> dict:
     """Store the provisional bars of `day`: only quotes whose last trade is on `day`, and none at
-    all when too few are (an unannounced holiday or a dead feed: SKIPPED_NO_SESSION)."""
+    all when too few are (an unannounced holiday or a dead feed: SKIPPED_NO_SESSION). The index
+    quotes become provisional index bars of `day` (index_bar, source UPSTOX_QUOTE), because the
+    historical 1d of T is served only the next morning."""
     fresh, stale = eod_quotes.split_fresh(rows, day)
     ts = [r["quote_ts"] for r in rows if r["quote_ts"] is not None]
     out = {"keys": len(keys), "quotes": len(rows), "fresh": len(fresh), "stale": len(stale),
@@ -39,6 +42,10 @@ async def eod(s, rid, day: _dt.date, keys: list[str], rows: list[dict]) -> dict:
         await runlog.end(s, rid, "NOOP", out)
         return out
     out["stored"] = await eod_quotes.store(s, rid, day, fresh)
+    ifresh, _ = eod_quotes.split_fresh(list(index_rows), day)
+    out["index_stored"] = await indices.store(s, rid, [
+        {"index_key": r["instrument_key"], "session_date": day,
+         **{f: r[f] for f in ("open", "high", "low", "close")}} for r in ifresh], "UPSTOX_QUOTE")
     await runlog.end(s, rid, "OK", out)
     return out
 
@@ -86,7 +93,8 @@ async def main(cmd: str, args: list[str]) -> dict:
                     start = (last[k] + _dt.timedelta(days=1)) if k in last else frm
                     rows = [r for r in indices.fetch_history(api, k, start, today())
                             if r["session_date"] >= start]
-                    out[k] = await indices.store(s, rid, k, rows, "UPSTOX_HIST")
+                    out[k] = await indices.store(s, rid, [dict(r, index_key=k) for r in rows],
+                                                 "UPSTOX_HIST")
             elif cmd == "manual":
                 out = {"files": await manual.load_dir(s, rid, get_settings().DRISHTI_DATA_DIR
                                                       / "manual")}
@@ -99,7 +107,9 @@ async def main(cmd: str, args: list[str]) -> dict:
                     return {"skipped": "not a trading day"}
                 async with prajna_sessionmaker()() as ps:
                     keys = await eod_quotes.universe_keys(ps)
-                return await eod(s, rid, t.date(), keys, eod_quotes.fetch(Upstox(), keys))
+                api = Upstox()
+                return await eod(s, rid, t.date(), keys, eod_quotes.fetch(api, keys),
+                                 eod_quotes.fetch(api, list(indices.INDEX_KEYS)))
             elif cmd == "barcheck":
                 out = await barcheck(s, args)
             else:

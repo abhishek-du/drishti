@@ -44,3 +44,28 @@ The spec builds the provisional bar of T from the 15:40 quote. Clarification: a 
 - A stock that did not trade on T has no official 1d bar either. On 2026-10-28, 160 of 3,576 quotes had an older last trade, and all 3,416 others matched an official bar.
 
 **Code:** `drishti/run/p1.py: eod`, `drishti/data/eod_quotes.py: split_fresh`; test `test_eod_skips_a_day_without_trades_in_test_db`.
+
+## SC3 (user, 2026-10-29): which bar orders come from, and the morning recheck
+
+The spec says a signal is "recomputed and flagged `BAR_REVISED`" when the official bar differs. The user fixed how this works, and it applies unless the 5-session bar check (10-28 … 11-03) says otherwise:
+
+1. **Evening:** signals and paper orders for T+1 are made at **19:30 from the provisional bar** (as written).
+2. **Morning recheck:** at **T+1 08:45**, if Prajna's official 1d bar for T is present, every pending order is re-evaluated on the official bar.
+   - If any trigger condition of its signal no longer holds, the order is cancelled with reason **`BAR_REVISED_CANCEL`**.
+   - The morning **never creates** a signal or an order, and never enlarges one. It can only cancel.
+3. **Recorded on each order:**
+   - `bar_source`: `provisional` or `official`;
+   - `recheck_status`: `rechecked_ok`, `cancelled` or `official_missing`.
+4. **Backtests and replays use official bars.** The forward scorecard reports how many forward orders the recheck cancelled.
+
+**Why this is a clarification:**
+- Cancel-only keeps the evening decision as an upper bound.
+- No threshold or level changes.
+- Order levels (trigger, stop, target) stay as set in the evening. Highs and lows had no revisions on 10-28.
+
+**Not built yet:** the order tables come in P5. The 08:45 recheck job and its fields are part of P5, and are listed in `FREEZE_M1.md` at P6.
+
+**Index bars (same day):**
+- The 15:40 snapshot also stores the 21 index quotes as provisional index bars of T (`index_bar`, source `UPSTOX_QUOTE`, same last-trade-today rule).
+- The 22:15 historical job still adds the official bars, which arrive one day later.
+- The regime gate at 19:30 reads the provisional Nifty 500 close of T.
