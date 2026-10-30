@@ -171,3 +171,35 @@ def rs_daily(df: pd.DataFrame, date: str = "session_date") -> pd.DataFrame:
     pct = sc.groupby(df[date]).rank(pct=True)
     cut = sc.groupby(df[date]).transform(lambda s: s.quantile(0.75))
     return pd.DataFrame({"rs_score": sc, "rs_pct": pct, "rs_top": sc >= cut}, index=df.index)
+
+
+def supertrend(df: pd.DataFrame, by: str | None = None, n: int = 10, mult: float = 3.0
+               ) -> pd.DataFrame:
+    """Supertrend (chart indicator; not in the frozen spec): basic bands hl2 -+ mult x Wilder
+    ATR(n) (`atr`), carried as usual (the lower band only rises and the upper band only falls
+    while the previous close stays on their side). The direction flips up when the close
+    crosses above the previous final upper band and down when it crosses below the previous
+    final lower band; the first bar of a stock starts up. st = the lower band in an uptrend,
+    the upper band in a downtrend; st_dir = +1 / -1 (NaN until ATR exists)."""
+    a = atr(df, by, n).to_numpy()
+    hl2 = ((df.high + df.low) / 2).to_numpy(float)
+    c = df.close.to_numpy(float)
+    g = _grp(df, by).to_numpy()
+    up, dn = hl2 - mult * a, hl2 + mult * a
+    st, dr = np.full(len(df), np.nan), np.full(len(df), np.nan)
+    fu, fd = up.copy(), dn.copy()
+    for i in range(len(df)):
+        if np.isnan(a[i]):
+            continue
+        if i == 0 or g[i] != g[i - 1] or np.isnan(a[i - 1]):
+            d = 1
+        else:
+            fu[i] = max(up[i], fu[i - 1]) if c[i - 1] > fu[i - 1] else up[i]
+            fd[i] = min(dn[i], fd[i - 1]) if c[i - 1] < fd[i - 1] else dn[i]
+            d = dr[i - 1]
+            if d == -1 and c[i] > fd[i - 1]:
+                d = 1
+            elif d == 1 and c[i] < fu[i - 1]:
+                d = -1
+        dr[i], st[i] = d, fu[i] if d == 1 else fd[i]
+    return pd.DataFrame({"st": st, "st_dir": dr}, index=df.index)

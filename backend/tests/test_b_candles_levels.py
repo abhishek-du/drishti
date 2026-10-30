@@ -170,3 +170,26 @@ def test_track_c_trend_and_nearest_match_the_f1_columns():
     s, r = levels.nearest(zs, 95)
     assert s["price"] == 90 and r["price"] == 100
     assert levels.nearest(zs, 100) == (zs[0], None)
+
+
+def test_supertrend_on_a_hand_built_series():
+    # 20 bars rising by 1 (range 2), then 20 bars falling by 2 (range 2)
+    c = np.r_[np.arange(100, 120, 1.0), np.arange(118, 78, -2.0)]
+    df = pd.DataFrame({"open": c, "high": c + 1, "low": c - 1, "close": c})
+    st = indicators.supertrend(df, n=3, mult=1.0)
+    assert list(st.columns) == ["st", "st_dir"]
+    assert st.st_dir.iloc[:2].isna().all() and st.st_dir.iloc[2] == 1      # ATR(3) from bar 2
+    up = st.iloc[2:20]
+    assert (up.st_dir == 1).all() and (up.st < df.close.iloc[2:20]).all()
+    assert up.st.is_monotonic_increasing                                 # the lower band only rises
+    a = indicators.atr(df, n=3)
+    assert np.isclose(st.st.iloc[19], max(119 - 1.0 * a.iloc[19], st.st.iloc[18]))
+    down = st.iloc[25:]
+    assert (down.st_dir == -1).all() and (down.st > df.close.iloc[25:]).all()
+    assert down.st.is_monotonic_decreasing                               # the upper band only falls
+    flip = int(np.flatnonzero(st.st_dir.to_numpy() == -1)[0])
+    assert 20 <= flip <= 22                                              # within 3 bars of the top
+    # grouped == one stock at a time
+    two = pd.concat([df.assign(k="A"), df.assign(k="B")], ignore_index=True)
+    g = indicators.supertrend(two, by="k", n=3, mult=1.0)
+    assert np.allclose(g.iloc[40:].st.to_numpy(), st.st.to_numpy(), equal_nan=True)
