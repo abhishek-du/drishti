@@ -6,8 +6,8 @@
 /api/chart2/indicator?key=&tf=&kind=&...    one indicator with the user's parameters (the chart's
                                             indicators menu); kinds in INDICATORS
 
-Indicators and patterns come only from drishti.features (bollinger/macd/vwap/trend/nearest from
-chart_stubs until Track B lands them). 1m/5m are LIVE VIEW: not used by drishti-swing-v1.
+Indicators and patterns come only from drishti.features (supertrend from chart_stubs until Track B
+lands it). 1m/5m are LIVE VIEW: not used by drishti-swing-v1.
 Blind rule: no outcome or P&L of any signal or watchlist entry is served here.
 """
 
@@ -58,19 +58,19 @@ def compute(df: pd.DataFrame, tf: str) -> dict:
     """Everything the chart draws, from bars (chart_data COLS, oldest first)."""
     df = df.reset_index(drop=True)
     ind = indicators.basic(df)
-    ind = pd.concat([ind, stubs.bollinger(df), stubs.macd(df)], axis=1)
+    ind = pd.concat([ind, indicators.bollinger(df), indicators.macd(df)], axis=1)
     if tf == "1d":
         ind["vwap"] = np.nan
     else:   # the exchange VWAP where the feed has it, else the session VWAP of the bars
-        ind["vwap"] = df.vwap.where(df.vwap.notna(), stubs.vwap(df))
+        ind["vwap"] = df.vwap.where(df.vwap.notna(), indicators.vwap(df))
     fl = candles.flags(pd.concat([df, ind[["atr"]]], axis=1))
     atr = ind.atr.iloc[-1]
     zs = levels.zones(df.high.to_numpy(float), df.low.to_numpy(float), float(atr)) \
         if atr > 0 else []
     t = [x if isinstance(x, str) else int(x) for x in df.time]
-    tr = stubs.trend(df, ind)
+    tr = levels.trend(df, ind)
     close = float(df.close.iloc[-1])
-    sup, res = stubs.nearest(zs, close)
+    sup, res = levels.nearest(zs, close)
     last = {n: _f(ind[n].iloc[-1]) for n in ("ema20", "sma50", "vwap", "rsi")}
     names, on = np.array(candles.FLAGS), fl.to_numpy()
     chg = df.close.pct_change() * 100
@@ -141,15 +141,15 @@ def indicator(df: pd.DataFrame, tf: str, kind: str, n: int, k: float, fast: int,
     if kind == "vwap":
         if tf == "1d":
             raise HTTPException(400, "VWAP is intraday only")
-        return {"vwap": df.vwap.where(df.vwap.notna(), stubs.vwap(df))}
+        return {"vwap": df.vwap.where(df.vwap.notna(), indicators.vwap(df))}
     if kind == "bb":
-        return dict(stubs.bollinger(df, n=n, k=k).items())
+        return dict(indicators.bollinger(df, n=n, k=k).items())
     if kind == "rsi":
         return {"rsi": indicators.rsi(df, n=n)}
     if kind == "macd":
         if fast >= slow:
             raise HTTPException(400, "fast must be < slow")
-        return dict(stubs.macd(df, fast=fast, slow=slow, signal=signal).items())
+        return dict(indicators.macd(df, fast=fast, slow=slow, signal=signal).items())
     if kind == "atr":
         return {"atr": indicators.atr(df, n=n)}
     return dict(stubs.supertrend(df, n=n, mult=mult).items())
@@ -182,7 +182,7 @@ async def chart_trends(key: str) -> dict:
     for tf in TFS:
         try:
             df, _ = await load(key, tf)
-            out[tf] = stubs.trend(df.reset_index(drop=True),
+            out[tf] = levels.trend(df.reset_index(drop=True),
                                   indicators.basic(df.reset_index(drop=True))) \
                 if not df.empty else None
         except Exception:   # one missing source must not hide the other badges

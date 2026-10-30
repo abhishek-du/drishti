@@ -1,5 +1,5 @@
-"""Track C: chart endpoints (read only), the stubs' interface and values, 1m aggregation and
-the bias box. No database: the loaders are monkeypatched."""
+"""Track C: chart endpoints (read only), the drishti.features interface the chart uses, the
+supertrend stub, 1m aggregation and the bias box. No database: the loaders are monkeypatched."""
 
 import datetime as _dt
 import inspect
@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from drishti.api import chart_api, chart_bias, chart_data, chart_stubs as st
-from drishti.features import indicators
+from drishti.features import indicators, levels
 
 API = Path(chart_api.__file__).parent
 DAY0 = int(_dt.datetime(2026, 10, 29, 9, 15, tzinfo=_dt.timezone(_dt.timedelta(hours=5.5)))
@@ -38,42 +38,42 @@ def _bars(n: int, seed: int = 1, intraday: bool = False) -> pd.DataFrame:
     return df[chart_data.COLS].assign(src="prajna")
 
 
-# --- stubs: interface and values -------------------------------------------------------------
+# --- drishti.features as the chart uses it (Track B's code; formerly chart stubs) -------------------------------------------------------------
 
-def test_stub_interface():
+def test_feature_interface():
     sig = lambda f: list(inspect.signature(f).parameters)  # noqa: E731
-    assert sig(st.bollinger) == ["df", "by", "n", "k"]
-    assert sig(st.macd) == ["df", "by", "fast", "slow", "signal"]
-    assert sig(st.vwap) == ["df", "by"]
-    assert sig(st.trend) == ["df", "ind"]
-    assert sig(st.nearest) == ["zones", "x"]
+    assert sig(indicators.bollinger) == ["df", "by", "n", "k"]
+    assert sig(indicators.macd) == ["df", "by", "fast", "slow", "signal"]
+    assert sig(indicators.vwap) == ["df", "by"]
+    assert sig(levels.trend) == ["df", "ind"]
+    assert sig(levels.nearest) == ["zs", "x"]
     df = _bars(60, intraday=True)
-    assert list(st.bollinger(df).columns) == ["bb_mid", "bb_up", "bb_lo"]
-    assert list(st.macd(df).columns) == ["macd", "macd_signal", "macd_hist"]
+    assert list(indicators.bollinger(df).columns) == ["bb_mid", "bb_up", "bb_lo"]
+    assert list(indicators.macd(df).columns) == ["macd", "macd_signal", "macd_hist"]
 
 
-def test_stub_values():
+def test_feature_values():
     df = _bars(80)
-    bb = st.bollinger(df)
+    bb = indicators.bollinger(df)
     w = df.close.iloc[-20:]
     assert bb.bb_mid.iloc[-1] == pytest.approx(w.mean())
     assert bb.bb_up.iloc[-1] == pytest.approx(w.mean() + 2 * w.std(ddof=0))
     assert bb.bb_mid.iloc[:19].isna().all()
-    m = st.macd(df)
+    m = indicators.macd(df)
     e = lambda n: df.close.ewm(span=n, adjust=False, min_periods=n).mean()  # noqa: E731
     assert m.macd.iloc[-1] == pytest.approx(e(12).iloc[-1] - e(26).iloc[-1])
     assert m.macd_hist.iloc[-1] == pytest.approx(m.macd.iloc[-1] - m.macd_signal.iloc[-1])
-    v = st.vwap(_bars(400, intraday=True))      # two sessions: resets on the second
+    v = indicators.vwap(_bars(400, intraday=True))      # two sessions: resets on the second
     d = _bars(400, intraday=True)
     tp = (d.high + d.low + d.close) / 3
     assert v.iloc[374] == pytest.approx((tp * d.volume)[:375].sum() / d.volume[:375].sum())
     assert v.iloc[375] == pytest.approx(tp.iloc[375])
 
 
-def test_stubs_no_lookahead():
+def test_features_no_lookahead():
     df = _bars(120)
-    a = pd.concat([st.bollinger(df), st.macd(df)], axis=1).iloc[:80]
-    b = pd.concat([st.bollinger(df.iloc[:80]), st.macd(df.iloc[:80])], axis=1)
+    a = pd.concat([indicators.bollinger(df), indicators.macd(df)], axis=1).iloc[:80]
+    b = pd.concat([indicators.bollinger(df.iloc[:80]), indicators.macd(df.iloc[:80])], axis=1)
     pd.testing.assert_frame_equal(a, b)
 
 
@@ -81,19 +81,19 @@ def test_trend_rule():
     n = 300
     up = np.linspace(100, 200, n) + 3 * np.sin(np.arange(n) / 3)   # rising swings
     df = pd.DataFrame({"open": up, "close": up, "high": up + 1, "low": up - 1, "volume": 1.0})
-    assert st.trend(df, indicators.basic(df)) == "UP"
+    assert levels.trend(df, indicators.basic(df)) == "UP"
     dn = df[["open", "close", "high", "low"]].mul(-1).add(400).assign(volume=1.0)
     dn = dn.rename(columns={"high": "low", "low": "high"})
-    assert st.trend(dn, indicators.basic(dn)) == "DOWN"
+    assert levels.trend(dn, indicators.basic(dn)) == "DOWN"
     short = df.iloc[:100].reset_index(drop=True)                   # no SMA200 yet
-    assert st.trend(short, indicators.basic(short)) == "SIDE"
+    assert levels.trend(short, indicators.basic(short)) == "SIDE"
 
 
 def test_nearest():
     zs = [{"price": p, "bottom": p - 1, "top": p + 1, "touches": 2} for p in (90, 98, 105, 120)]
-    s, r = st.nearest(zs, 100)
+    s, r = levels.nearest(zs, 100)
     assert s["price"] == 98 and r["price"] == 105        # band top 99 < 100
-    s, r = st.nearest(zs, 98.5)
+    s, r = levels.nearest(zs, 98.5)
     assert s["price"] == 90 and r["price"] == 105        # inside 98's band: neither side
 
 
@@ -252,6 +252,13 @@ def test_heikin_ashi(client):
     plain = client.get("/api/chart2/bars", params={"key": "K", "tf": "1d"}).json()
     assert j["heikin_ashi"] and j["bars"][0]["open"] != plain["bars"][0]["open"]
     assert j["lines"] == plain["lines"] and j["trend"] == plain["trend"]   # on the real bars
+
+
+def test_only_supertrend_is_stubbed():
+    pub = [n for n, f in vars(st).items() if inspect.isfunction(f) and f.__module__ == st.__name__]
+    assert pub == ["supertrend"]
+    src = Path(chart_api.__file__).read_text()
+    assert "stubs.supertrend" in src and not re.search(r"stubs\.(?!supertrend)", src)
 
 
 def test_supertrend_stub():
