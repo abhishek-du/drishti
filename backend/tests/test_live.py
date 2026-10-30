@@ -111,3 +111,26 @@ def test_live_ws_pushes_on_change(tmp_path, monkeypatch):
         nxt = ws.receive_json()
         assert nxt["candles"][-1]["close"] == 2
         assert time.monotonic() - t0 < 1.0          # pushed on change, not on a 2 s heartbeat
+
+
+def test_tick_files_survive_a_killed_writer(tmp_path):
+    import zstandard
+
+    root = tmp_path / "ticks"
+    t = _dt.datetime(2026, 10, 30, 12, 1, tzinfo=IST)
+    msgs = [_frame("K", 100 + i, T0 + i * 1000, 10 + i, 100) for i in range(50)]
+    w = store.TickWriter(root, guard_gb=0)
+    for m in msgs[:20]:
+        w.append(m, t)
+    w._z.flush(zstandard.FLUSH_BLOCK)                 # a killed writer: no frame end
+    w._f.flush()
+    w._f.close()
+    w._z = w._f = None
+    w2 = store.TickWriter(root, guard_gb=0)           # the restarted recorder, same slot
+    for m in msgs[20:]:
+        w2.append(m, t)
+    w2.close()
+    files = sorted((root / "2026-10-30").glob("*.zst"))
+    assert [f.name for f in files] == ["ticks_1200.zst", "ticks_1200_a.zst"]
+    got = [d for f in files for _, d in store.read_frames(f)]
+    assert got == msgs                                # nothing lost, nothing corrupt

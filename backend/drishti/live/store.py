@@ -23,6 +23,8 @@ from pathlib import Path
 import zstandard
 
 RETENTION_DAYS = 30            # user 2026-10-29 (60 later, after the disk cleanup 3.1)
+FRAME_S = 60                   # a zstd frame is closed every minute: a crash loses <= 1 min
+ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 GUARD_GB = 10.0
 ROTATE_MIN = 15
 DAY_DIR = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -40,6 +42,7 @@ class TickWriter:
         self.frames = self.raw_bytes = 0
         self.stopped_by_guard = False
         self.files: list[Path] = []
+        self._frame_at = 0.0
 
     def _open(self, t: _dt.datetime) -> None:
         slot = f"{t:%Y-%m-%d}/ticks_{t:%H}{t.minute // ROTATE_MIN * ROTATE_MIN:02d}.zst"
@@ -48,7 +51,11 @@ class TickWriter:
         self.close()
         p = self.root / slot
         p.parent.mkdir(parents=True, exist_ok=True)
-        self._f = open(p, "ab")
+        n = 0
+        while p.exists():                  # never append to another process's stream
+            n += 1
+            p = p.with_name(f"{slot.split('/')[1][:-4]}_{chr(96 + n)}.zst")
+        self._f = open(p, "wb")
         self._z = zstandard.ZstdCompressor(level=6).stream_writer(self._f)
         self._slot = slot
         self.files.append(p)
@@ -58,6 +65,10 @@ class TickWriter:
             return False
         self._open(recv)
         self._z.write(struct.pack(">qI", time.time_ns(), len(data)) + data)
+        if time.monotonic() - self._frame_at >= FRAME_S:
+            self._z.flush(zstandard.FLUSH_FRAME)
+            self._f.flush()
+            self._frame_at = time.monotonic()
         self.frames += 1
         self.raw_bytes += len(data)
         return True
@@ -77,10 +88,39 @@ class TickWriter:
         self._slot = None
 
 
+def _decode_lenient(raw: bytes) -> bytes:
+    """Decompress every zstd frame of `raw`; a truncated or damaged frame (a killed writer)
+    yields what can be decoded and reading goes on at the next frame magic."""
+    out, starts = bytearray(), []
+    i = raw.find(ZSTD_MAGIC)
+    while i != -1:
+        starts.append(i)
+        i = raw.find(ZSTD_MAGIC, i + 4)
+    pos = 0
+    for s0 in starts:
+        if s0 < pos:
+            continue
+        r = zstandard.ZstdDecompressor().decompressobj()
+        try:
+            chunk = r.decompress(raw[s0:])
+            out += chunk
+            pos = len(raw) - len(r.unused_data)
+        except zstandard.ZstdError:
+            # decode this frame piece by piece until it breaks
+            r = zstandard.ZstdDecompressor().decompressobj()
+            for j in range(s0, len(raw), 4096):
+                try:
+                    out += r.decompress(raw[j:j + 4096])
+                except zstandard.ZstdError:
+                    break
+            pos = s0 + 4
+    return bytes(out)
+
+
 def read_frames(path: Path):
-    """Yield (recv_ns, raw protobuf bytes) from one tick file (tests, replay)."""
-    with open(path, "rb") as f:
-        data = zstandard.ZstdDecompressor().stream_reader(f, read_across_frames=True).read()
+    """Yield (recv_ns, raw protobuf bytes) from one tick file (tests, replay). Damaged or
+    truncated zstd frames are skipped past (whole records only)."""
+    data = _decode_lenient(path.read_bytes())
     i = 0
     while i + 12 <= len(data):
         ns, n = struct.unpack(">qI", data[i:i + 12])

@@ -260,6 +260,10 @@ async def main(args: list[str]) -> int:
         rid = await runlog.start(s, "LIVE_RECORDER", t.date(),
                                  {"keys": len(keys), "until": stop.isoformat(), "pruned": gone})
         rec = Recorder(keys, stop)
+        import signal
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):     # stop cleanly: flush bars, close ticks
+            loop.add_signal_handler(sig, lambda: setattr(rec, "until", now()))
         try:
             out = await rec.run()
         except BaseException as e:
