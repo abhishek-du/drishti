@@ -19,12 +19,12 @@ def _imports(p: Path) -> set[str]:
 
 
 def test_chart_stubs_never_leave_the_api_package():
-    """Track C's temporary stubs (drishti/api/chart_stubs.py) must never reach strategies,
-    replay, ml, features or any other non-API code: one implementation of every indicator."""
+    """Track C's temporary stubs (drishti/api/chart_stubs.py) are deleted now that Track B landed
+    indicators.supertrend; stubs must not exist and must not be imported anywhere."""
+    assert not (PKG / "api" / "chart_stubs.py").exists(), "chart_stubs.py must be deleted"
     bad = sorted(str(p.relative_to(PKG)) for p in PKG.rglob("*.py")
-                 if "api" not in p.relative_to(PKG).parts[:1]
-                 and any("chart_stubs" in i for i in _imports(p)))
-    assert bad == [], f"chart_stubs imported outside drishti/api: {bad}"
+                 if any("chart_stubs" in i for i in _imports(p)))
+    assert bad == [], f"chart_stubs imported: {bad}"
 
 
 def test_nothing_outside_the_api_imports_the_api():

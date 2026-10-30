@@ -15,7 +15,7 @@ export const TOOLS: Tool[] = [
 ];
 
 type Coord = { x: number; y: number };
-type Pt = { value?: number };
+type Pt = { timestamp?: number; dataIndex?: number; value?: number };
 
 const rect: OverlayTemplate = {
   name: "d_rect", totalStep: 3, needDefaultPointFigure: true, needDefaultXAxisFigure: true, needDefaultYAxisFigure: true,
@@ -35,8 +35,11 @@ const measure: OverlayTemplate = {
     const [p, q] = overlay.points as Pt[];
     if (p?.value === undefined || q?.value === undefined) return [];
     const d = q.value - p.value, up = d >= 0;
-    // bars from the on-screen distance, so a point in the empty space after the last bar counts too
-    const bars = Math.round((b.x - a.x) / chart.getBarSpace().bar);
+    // bars from dataIndex if both present, else on-screen distance (handles points in empty space)
+    const barSpace = chart.getBarSpace().bar || 1;
+    const bars = typeof p.dataIndex === "number" && typeof q.dataIndex === "number"
+      ? Math.abs(q.dataIndex - p.dataIndex)
+      : Math.abs(Math.round((b.x - a.x) / barSpace));
     const color = up ? "rgba(18,128,92,.15)" : "rgba(192,54,44,.15)";
     return [
       { type: "rect", attrs: { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) }, styles: { style: "fill", color } },
@@ -89,7 +92,7 @@ export function registerOverlays() {
 
 // --- user drawings: saved per stock and timeframe in this browser (no DB writes) -------------
 export const USER = "user";
-export type Saved = { name: string; points: { timestamp?: number; value?: number }[]; extendData?: unknown; lock?: boolean };
+export type Saved = { name: string; points: { timestamp?: number; dataIndex?: number; value?: number }[]; extendData?: unknown; lock?: boolean };
 const storeKey = (key: string, tf: string) => `drishti.draw.v1.${key}.${tf}`;
 
 export function loadDrawings(key: string, tf: string): Saved[] {

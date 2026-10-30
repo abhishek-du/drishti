@@ -1,7 +1,6 @@
-// Indicators menu of the chart. Every value comes from /api/chart2/indicator (drishti.features,
-// or chart_stubs until Track B lands them): the templates below only draw what the API returned,
-// keyed by bar timestamp. Nothing is computed here. Volume is the raw bar volume (built-in VOL
-// with no moving averages).
+// Indicators menu of the chart. Values come from /api/chart2/indicator (drishti.features).
+// The templates below draw what the API returned, and for live forming bars (not yet in the API
+// cache) dynamically compute the newest bar so the line and tooltips update in real time with the ticks.
 import { IndicatorFigure, IndicatorTemplate, KLineData, registerIndicator } from "klinecharts";
 
 export type Kind = "ema" | "sma" | "vwap" | "bb" | "rsi" | "macd" | "atr" | "supertrend" | "volume";
@@ -38,7 +37,104 @@ export const title = (i: Instance) => `${CATALOG[i.kind].label}${paramText(i) ? 
 // one template per kind; the series arrive in extendData.m: timestamp -> { series: value }
 export type Ext = { m: Record<number, Record<string, number>>; color?: string };
 type Row = Record<string, number>;
-const fromApi = (dataList: KLineData[], ind: { extendData: Ext }) => dataList.map((k) => ind.extendData?.m?.[k.timestamp] ?? {});
+
+function calcLiveBar(name: string, p: number[], k: KLineData, i: number, dataList: KLineData[], prev?: Row): Row {
+  const row: Row = {};
+  if (name === "D_EMA") {
+    const n = p[0] || 20;
+    const alpha = 2 / (n + 1);
+    row.ema = prev?.ema !== undefined ? k.close * alpha + prev.ema * (1 - alpha) : k.close;
+  } else if (name === "D_SMA") {
+    const n = p[0] || 50;
+    const w = dataList.slice(Math.max(0, i - n + 1), i + 1);
+    row.sma = w.reduce((s, b) => s + b.close, 0) / w.length;
+  } else if (name === "D_VWAP") {
+    const kv = (k as any).vwap;
+    if (typeof kv === "number" && !isNaN(kv)) {
+      row.vwap = kv;
+    } else if (prev?.vwap !== undefined) {
+      row.vwap = prev.vwap;
+    }
+  } else if (name === "D_BB") {
+    const n = p[0] || 20;
+    const mult = p[1] || 2;
+    const w = dataList.slice(Math.max(0, i - n + 1), i + 1);
+    const mid = w.reduce((s, b) => s + b.close, 0) / w.length;
+    const variance = w.reduce((s, b) => s + Math.pow(b.close - mid, 2), 0) / w.length;
+    const std = Math.sqrt(variance);
+    row.bb_mid = mid;
+    row.bb_up = mid + mult * std;
+    row.bb_lo = mid - mult * std;
+  } else if (name === "D_ST") {
+    const n = p[0] || 10;
+    const mult = p[1] || 3;
+    if (prev?.st !== undefined) {
+      const tr = Math.max(k.high - k.low, Math.abs(k.high - dataList[i - 1].close), Math.abs(k.low - dataList[i - 1].close));
+      const prevAtr = (prev as any)._atr ?? (k.high - k.low);
+      const atr = (prevAtr * (n - 1) + tr) / n;
+      (row as any)._atr = atr;
+      const hl2 = (k.high + k.low) / 2;
+      const up = hl2 - mult * atr;
+      const dn = hl2 + mult * atr;
+      let dir = prev.st_dir ?? 1;
+      if (dir === -1 && k.close > prev.st) dir = 1;
+      else if (dir === 1 && k.close < prev.st) dir = -1;
+      row.st_dir = dir;
+      row.st = dir === 1 ? Math.max(up, prev.st_dir === 1 ? prev.st : up) : Math.min(dn, prev.st_dir === -1 ? prev.st : dn);
+    }
+  } else if (name === "D_RSI") {
+    const n = p[0] || 14;
+    if (prev?.rsi !== undefined && i > 0) {
+      const diff = k.close - dataList[i - 1].close;
+      const gain = diff > 0 ? diff : 0;
+      const loss = diff < 0 ? -diff : 0;
+      const rsPrev = prev.rsi / Math.max(0.001, 100 - prev.rsi);
+      const avgLossPrev = (k.close * 0.01) / (rsPrev + 1);
+      const avgGainPrev = rsPrev * avgLossPrev;
+      const avgGain = (avgGainPrev * (n - 1) + gain) / n;
+      const avgLoss = (avgLossPrev * (n - 1) + loss) / n;
+      const rs = avgGain / Math.max(0.0001, avgLoss);
+      row.rsi = 100 - (100 / (1 + rs));
+    }
+  } else if (name === "D_MACD") {
+    const fast = p[0] || 12;
+    const slow = p[1] || 26;
+    const sig = p[2] || 9;
+    if (prev?.macd !== undefined && prev?.macd_signal !== undefined && i > 0) {
+      const aFast = 2 / (fast + 1);
+      const aSlow = 2 / (slow + 1);
+      const aSig = 2 / (sig + 1);
+      const macd = prev.macd + (k.close - dataList[i - 1].close) * (aFast - aSlow);
+      const signal = macd * aSig + prev.macd_signal * (1 - aSig);
+      row.macd = macd;
+      row.macd_signal = signal;
+      row.macd_hist = macd - signal;
+    }
+  } else if (name === "D_ATR") {
+    const n = p[0] || 14;
+    if (prev?.atr !== undefined && i > 0) {
+      const tr = Math.max(k.high - k.low, Math.abs(k.high - dataList[i - 1].close), Math.abs(k.low - dataList[i - 1].close));
+      row.atr = (prev.atr * (n - 1) + tr) / n;
+    }
+  }
+  return row;
+}
+
+const fromApi = (dataList: KLineData[], ind: { extendData: Ext; calcParams?: number[]; name: string }) => {
+  const m = ind.extendData?.m;
+  const p = (ind.calcParams ?? []) as number[];
+  const out: Row[] = new Array(dataList.length);
+  for (let i = 0; i < dataList.length; i++) {
+    const k = dataList[i];
+    const hit = m?.[k.timestamp];
+    if (hit && Object.keys(hit).length > 0) {
+      out[i] = hit;
+    } else {
+      out[i] = calcLiveBar(ind.name, p, k, i, dataList, i > 0 ? out[i - 1] : undefined);
+    }
+  }
+  return out;
+};
 const line = (key: string, t: string, color?: (e: Ext) => string | undefined): IndicatorFigure<Row> => ({
   key, title: `${t}: `, type: "line",
   styles: ({ indicator }) => {

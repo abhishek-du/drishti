@@ -34,7 +34,7 @@ type Layers = { zones: boolean; patterns: "bullish" | "all" | "off"; trend: bool
 type Magnet = "normal" | "weak_magnet" | "strong_magnet";
 
 export const ts = (t: string | number) => (typeof t === "number" ? t * 1000 : Date.parse(`${t}T00:00:00+05:30`));
-const LS = { ind: "drishti.chart.ind.v1", ctype: "drishti.chart.ctype", scale: "drishti.chart.scale", layers: "drishti.chart.layers", theme: "drishti.theme", magnet: "drishti.chart.magnet" };
+const LS = { ind: "drishti.chart.ind.v1", ctype: "drishti.chart.ctype", scale: "drishti.chart.scale", layers: "drishti.chart.layers", theme: "drishti.theme.v1", magnet: "drishti.chart.magnet" };
 function ls<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); return v ? (JSON.parse(v) as T) : d; } catch { return d; } }
 function lsSet(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked */ } }
 const qs = (o: Record<string, string | number | boolean>) => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&");
@@ -55,7 +55,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const [scale, setScale] = useState<Scale>("normal");
   const [layers, setLayers] = useState<Layers>({ zones: true, patterns: "bullish", trend: true });
   const [inds, setInds] = useState<Instance[]>(DEFAULT_SET);
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [magnet, setMagnet] = useState<Magnet>("weak_magnet");
   const [locked, setLocked] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
@@ -66,7 +66,8 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const [pinned, setPinned] = useState<number | null>(null);   // the bar whose details card is open (opened by a click)
   const hoverRef = useRef(hover);
   hoverRef.current = hover;
-  const [, setTick] = useState(0);   // re-render the legend when a live candle arrives
+  const [, setTick] = useState(0);              // re-render the legend when a live candle arrives
+  const [indTick, setIndTick] = useState(0);     // re-fetch indicator values from API on 10s interval
   const [menu, setMenu] = useState<"" | "ind" | "settings" | "type">("");
   const [hstate, setHstate] = useState({ u: false, r: false });
   const [ready, setReady] = useState(false);
@@ -75,10 +76,19 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   useEffect(() => {
     setCtype(ls(LS.ctype, "candle_solid")); setScale(ls(LS.scale, "normal")); setInds(ls(LS.ind, DEFAULT_SET));
     setLayers({ zones: true, patterns: "bullish", trend: true, ...ls(LS.layers, {}) }); setMagnet(ls(LS.magnet, "weak_magnet"));
-    setTheme(ls<"light" | "dark" | null>(LS.theme, null) ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+    const savedTheme = ls<"light" | "dark" | null>(LS.theme, null);
+    setTheme(savedTheme || "dark");
     setReady(true);
   }, []);
-  useEffect(() => { if (ready) document.documentElement.dataset.theme = theme; }, [theme, ready]);
+  useEffect(() => { if (ready) document.documentElement.setAttribute("data-theme", theme); }, [theme, ready]);
+  useEffect(() => {
+    const onTheme = (e: Event) => {
+      const t = (e as CustomEvent<"light" | "dark">).detail;
+      if (t === "light" || t === "dark") setTheme(t);
+    };
+    window.addEventListener("drishti:theme", onTheme);
+    return () => window.removeEventListener("drishti:theme", onTheme);
+  }, []);
 
   // the chart itself
   useEffect(() => {
@@ -200,7 +210,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
     });
     return () => { dead = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [d, indKey]);
+  }, [d, indKey, indTick]);
   useEffect(() => { if (ready) lsSet(LS.ind, inds); }, [indKey, ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // live 1m/5m: candles from the WebSocket every second (no page refresh); indicator values
@@ -210,17 +220,39 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
     const close = d.heikin_ashi ? () => {} : openLive((msg) => {
       const lastT = bars.current.length ? bars.current[bars.current.length - 1].timestamp : 0;
       const fresh = (msg.candles ?? []).filter((x: LiveCandle) => x.time * 1000 >= lastT);
-      fresh.forEach((x) => liveCb.current?.({ timestamp: x.time * 1000, open: x.open, high: x.high, low: x.low, close: x.close, volume: x.volume }));
+      fresh.forEach((x) => {
+        const k: KLineData = {
+          timestamp: x.time * 1000,
+          open: x.open,
+          high: x.high,
+          low: x.low,
+          close: x.close,
+          volume: x.volume,
+          ...(x.vwap != null ? { vwap: x.vwap } : {}),
+        } as any;
+        const last = bars.current[bars.current.length - 1];
+        if (last && last.timestamp === k.timestamp) {
+          bars.current[bars.current.length - 1] = k;
+        } else if (!last || k.timestamp > last.timestamp) {
+          bars.current.push(k);
+        }
+        liveCb.current?.(k);
+      });
       if (fresh.length) setTick((t) => t + 1);
     }, d.key, d.tf === "5m" ? 5 : 1);
-    const iv = setInterval(() => { if (d.heikin_ashi) load(); else setInds((x) => [...x]); }, 10000);
+    const iv = setInterval(() => { if (d.heikin_ashi) load(); else setIndTick((t) => t + 1); }, 10000);
     return () => { close(); clearInterval(iv); };
   }, [d, load]);
 
   // user drawings: snapshot, save, undo/redo
   const snapshot = useCallback((): Saved[] => (chart.current?.getOverlays({ groupId: USER }) ?? [])
     .filter((o) => o.points.length >= o.totalStep - 1)
-    .map((o) => ({ name: o.name, points: o.points.map((p) => ({ timestamp: p.timestamp, value: p.value })), extendData: o.extendData, lock: o.lock })), []);
+    .map((o) => ({
+      name: o.name,
+      points: o.points.map((p) => ({ timestamp: p.timestamp, dataIndex: p.dataIndex, value: p.value })),
+      extendData: o.extendData,
+      lock: o.lock,
+    })), []);
   const commit = useCallback(() => {
     if (mute.current || !d) return;
     const s = snapshot();
@@ -351,7 +383,12 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const setType = (t: CType) => { setCtype(t); lsSet(LS.ctype, t); setMenu(""); };
   const setScaleP = (s: Scale) => { setScale(s); lsSet(LS.scale, s); };
   const setLayersP = (l: Layers) => { setLayers(l); lsSet(LS.layers, l); };
-  const setThemeP = (t: "light" | "dark") => { setTheme(t); lsSet(LS.theme, t); };
+  const setThemeP = (t: "light" | "dark") => {
+    setTheme(t);
+    lsSet(LS.theme, t);
+    document.documentElement.setAttribute("data-theme", t);
+    window.dispatchEvent(new CustomEvent("drishti:theme", { detail: t }));
+  };
 
   useEffect(() => { if (pinned !== null && (!hover || hover.i !== pinned)) setPinned(null); }, [hover, pinned]);
 

@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from drishti.api import chart_api, chart_bias, chart_data, chart_stubs as st
+from drishti.api import chart_api, chart_bias, chart_data
 from drishti.features import indicators, levels
 
 API = Path(chart_api.__file__).parent
@@ -45,6 +45,7 @@ def test_feature_interface():
     assert sig(indicators.bollinger) == ["df", "by", "n", "k"]
     assert sig(indicators.macd) == ["df", "by", "fast", "slow", "signal"]
     assert sig(indicators.vwap) == ["df", "by"]
+    assert sig(indicators.supertrend) == ["df", "by", "n", "mult"]
     assert sig(levels.trend) == ["df", "ind"]
     assert sig(levels.nearest) == ["zs", "x"]
     df = _bars(60, intraday=True)
@@ -254,20 +255,19 @@ def test_heikin_ashi(client):
     assert j["lines"] == plain["lines"] and j["trend"] == plain["trend"]   # on the real bars
 
 
-def test_only_supertrend_is_stubbed():
-    pub = [n for n, f in vars(st).items() if inspect.isfunction(f) and f.__module__ == st.__name__]
-    assert pub == ["supertrend"]
+def test_no_stubs_remain():
+    assert not (API / "chart_stubs.py").exists(), "chart_stubs.py was not deleted"
     src = Path(chart_api.__file__).read_text()
-    assert "stubs.supertrend" in src and not re.search(r"stubs\.(?!supertrend)", src)
+    assert "chart_stubs" not in src and "stubs." not in src
 
 
-def test_supertrend_stub():
+def test_supertrend():
     up = np.linspace(100, 200, 120)
     df = pd.DataFrame({"open": up, "close": up, "high": up + 1, "low": up - 1, "volume": 1.0})
-    s = st.supertrend(df, n=10, mult=3.0)
+    s = indicators.supertrend(df, n=10, mult=3.0)
     assert s.st.iloc[:9].isna().all() and s.st_dir.iloc[-1] == 1
     assert (s.st.iloc[20:] < df.close.iloc[20:]).all()          # below price in an uptrend
-    a = st.supertrend(pd.concat([df, df.iloc[::-1]], ignore_index=True), n=10).iloc[:120]
+    a = indicators.supertrend(pd.concat([df, df.iloc[::-1]], ignore_index=True), n=10).iloc[:120]
     pd.testing.assert_frame_equal(a, s)                          # no look-ahead
 
 
