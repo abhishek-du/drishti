@@ -18,7 +18,8 @@ export type BarsData = {
   key: string; tf: Tf; label: string | null; adjusted: boolean; heikin_ashi: boolean;
   sources: { source: string; bars: number; last_time: string | null }[];
   symbol: string | null; name: string | null; sector: string | null; watchlist_dates: string[];
-  bars: { time: string | number; open: number; high: number; low: number; close: number; volume: number; chg_pct: number | null }[];
+  bars: { time: string | number; open: number; high: number; low: number; close: number; volume: number; chg_pct: number | null;
+          dir: "bull" | "bear" | "flat"; confirm: string | null; follow: string | null }[];
   lines: Record<string, Pt[]>; panes: Record<string, Pt[]>;
   candles: { time: string | number; flags: string[] }[]; bullish_flags: string[];
   zones: { price: number; bottom: number; top: number; touches: number }[];
@@ -62,6 +63,9 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const [hover, setHover] = useState<{ i: number; x: number } | null>(null);   // the bar under the mouse
+  const [pinned, setPinned] = useState<number | null>(null);   // the bar whose details card is open (opened by a click)
+  const hoverRef = useRef(hover);
+  hoverRef.current = hover;
   const [, setTick] = useState(0);   // re-render the legend when a live candle arrives
   const [menu, setMenu] = useState<"" | "ind" | "settings" | "type">("");
   const [hstate, setHstate] = useState({ u: false, r: false });
@@ -99,12 +103,15 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
     });
     const leave = () => setHover(null);
     box.current.addEventListener("mouseleave", leave);
+    // a click on a bar opens its details card (not while a drawing tool is active)
+    const click = () => { if (!pendingRef.current) setPinned(hoverRef.current ? hoverRef.current.i : null); };
+    box.current.addEventListener("click", click);
     const ro = new ResizeObserver(() => c.resize());
     ro.observe(box.current);
     const fs = () => setTimeout(() => c.resize(), 50);
     document.addEventListener("fullscreenchange", fs);
     const el = box.current;
-    return () => { ro.disconnect(); el.removeEventListener("mouseleave", leave); document.removeEventListener("fullscreenchange", fs); dispose(c); chart.current = null; };
+    return () => { ro.disconnect(); el.removeEventListener("mouseleave", leave); el.removeEventListener("click", click); document.removeEventListener("fullscreenchange", fs); dispose(c); chart.current = null; };
   }, []);
 
   useEffect(() => {
@@ -346,10 +353,13 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const setLayersP = (l: Layers) => { setLayers(l); lsSet(LS.layers, l); };
   const setThemeP = (t: "light" | "dark") => { setTheme(t); lsSet(LS.theme, t); };
 
+  useEffect(() => { if (pinned !== null && (!hover || hover.i !== pinned)) setPinned(null); }, [hover, pinned]);
+
   // legend: OHLC + change of the hovered bar, else the last bar, from the chart's own data (so it
   // follows the live candles)
   const dl: KLineData[] = d ? (chart.current?.getDataList() ?? []) : [];
   const li = hover && hover.i < dl.length ? hover.i : dl.length - 1;
+  const cardOpen = pinned !== null && hover !== null && hover.i === pinned;
   const lb = li >= 0 ? dl[li] : null;
   const prev = li > 0 ? dl[li - 1] : undefined;
   const chg = lb && prev ? lb.close - prev.close : null;
@@ -412,7 +422,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
               <span className="muted">Vol {(lb.volume ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
             </div>
           )}
-          {hover && lb && d && <BarCard d={d} k={lb} prev={prev} when={when} x={hover.x} width={box.current?.clientWidth ?? 0} live={live}
+          {cardOpen && hover && lb && d && <BarCard d={d} k={lb} prev={prev} when={when} x={hover.x} width={box.current?.clientWidth ?? 0} live={live}
             inds={chart.current?.getIndicators() ?? []} i={li} />}
           {layers.trend && d && (
             <div className={`kc-trend pill ${d.trend === "UP" ? "on" : d.trend === "DOWN" ? "off" : ""}`} title="Spec section 3 trend rule">
@@ -441,6 +451,10 @@ function BarCard({ d, k, prev, when, x, width, live, inds, i }: {
 }) {
   const chg = prev ? k.close - prev.close : null;
   const pats = d.candles.find((c) => ts(c.time) === k.timestamp)?.flags ?? [];
+  const sb = d.bars.find((b) => ts(b.time) === k.timestamp);   // undefined for a live bar newer than the API data
+  const dir = k.close > k.open ? "bull" : k.close < k.open ? "bear" : "flat";
+  const DIR = { bull: ["Bullish (green)", "var(--up)"], bear: ["Bearish (red)", "var(--down)"], flat: ["Flat (open = close)", "var(--muted)"] } as const;
+  const tone = (v: string | null | undefined) => (v === "confirmed" || v === "follow-through" ? (dir === "bull" ? "var(--up)" : "var(--down)") : "var(--muted)");
   const W = 250;
   const left = x + 18 + W > width ? Math.max(4, x - W - 18) : x + 18;
   const rows: [string, string][] = [];
@@ -457,6 +471,7 @@ function BarCard({ d, k, prev, when, x, width, live, inds, i }: {
       {live && <div className="pill warn" style={{ marginBottom: 4 }}>{LIVE_LABEL}</div>}
       <b>{d.symbol} · {d.tf}{d.heikin_ashi ? " · Heikin Ashi" : ""}</b>
       <div className="muted">{when}{d.tf === "1d" ? "" : " IST"}</div>
+      <div style={{ color: DIR[dir][1], fontWeight: 700, marginTop: 2 }}>{DIR[dir][0]}</div>
       <table><tbody>
         <tr><td>Open</td><td>{fmt(k.open)}</td></tr>
         <tr><td>High</td><td>{fmt(k.high)}</td></tr>
@@ -467,7 +482,14 @@ function BarCard({ d, k, prev, when, x, width, live, inds, i }: {
         <tr><td>Volume</td><td>{(k.volume ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</td></tr>
         {rows.map(([a, v]) => <tr key={a}><td>{a}</td><td>{v}</td></tr>)}
         {pats.length > 0 && <tr><td>Patterns</td><td>{pats.join(", ")}</td></tr>}
+        {dir !== "flat" && <>
+          <tr><td title={dir === "bull" ? "next candle closed above this high" : "next candle closed below this low"}>Next candle</td>
+            <td style={{ color: tone(sb?.confirm) }}>{sb?.confirm ?? "pending"}</td></tr>
+          {(sb?.confirm === "confirmed") && <tr><td title="the candle after that closed further in the same direction">Candle after</td>
+            <td style={{ color: tone(sb?.follow) }}>{sb?.follow ?? "pending"}</td></tr>}
+        </>}
       </tbody></table>
+      <div className="muted small" style={{ marginTop: 4 }}>Next candle / candle after: what later candles did (hindsight). NOT a prediction; not used by drishti-swing-v1.</div>
     </div>
   );
 }

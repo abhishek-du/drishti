@@ -269,3 +269,24 @@ def test_supertrend_stub():
     assert (s.st.iloc[20:] < df.close.iloc[20:]).all()          # below price in an uptrend
     a = st.supertrend(pd.concat([df, df.iloc[::-1]], ignore_index=True), n=10).iloc[:120]
     pd.testing.assert_frame_equal(a, s)                          # no look-ahead
+
+
+def test_hindsight_confirmation():
+    df = pd.DataFrame({"open": [10, 11, 12, 13, 12, 11, 10], "high": [11, 12.5, 13.5, 13.2, 12.2, 11.2, 10.5],
+                       "low": [9.5, 10.8, 11.8, 11.5, 10.5, 9.8, 9.6], "close": [10.8, 12.4, 13.2, 11.6, 10.6, 10.0, 10.2]})
+    h = chart_api.hindsight(df)
+    assert [x["dir"] for x in h] == ["bull", "bull", "bull", "bear", "bear", "bear", "bull"]
+    assert h[0] == {"dir": "bull", "confirm": "confirmed", "follow": "follow-through"}   # 12.4 > 11, 13.2 > 12.4
+    assert h[1] == {"dir": "bull", "confirm": "confirmed", "follow": "no follow-through"}  # 13.2 > 12.5, 11.6 < 13.2
+    assert h[2]["confirm"] == "not confirmed" and h[2]["follow"] is None                 # 11.6 <= 13.5
+    assert h[3] == {"dir": "bear", "confirm": "confirmed", "follow": "follow-through"}    # 10.6 < 11.5, 10.0 < 10.6
+    assert h[4] == {"dir": "bear", "confirm": "confirmed", "follow": "no follow-through"}  # 10.0 < 10.5, 10.2 > 10.0
+    assert h[5]["confirm"] == "not confirmed"                                             # 10.2 >= 9.8
+    assert h[6] == {"dir": "bull", "confirm": "pending", "follow": None}                  # no next bar
+    flat = chart_api.hindsight(pd.DataFrame({"open": [1.0, 1.0], "high": [1.1, 1.2], "low": [0.9, 0.9], "close": [1.0, 1.1]}))
+    assert flat[0] == {"dir": "flat", "confirm": None, "follow": None} and flat[1]["confirm"] == "pending"
+
+
+def test_bars_carry_hindsight(client):
+    b = client.get("/api/chart2/bars", params={"key": "K", "tf": "5m"}).json()["bars"]
+    assert {"dir", "confirm", "follow"} <= b[0].keys() and b[-1]["confirm"] in ("pending", None)

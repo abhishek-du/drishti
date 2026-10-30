@@ -48,6 +48,35 @@ def heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
                      low=np.minimum.reduce([lo, ho, hc]))
 
 
+def hindsight(df: pd.DataFrame) -> list[dict]:
+    """Per bar: its colour, and what the NEXT candles did (display only, uses later bars; not a
+    prediction and not used by drishti-swing-v1).
+      dir      bull (close > open) | bear (close < open) | flat
+      confirm  bull bar: the next candle closed above this bar's high -> 'confirmed', else 'not
+               confirmed'; bear bar: mirror with the low; 'pending' when there is no next bar
+      follow   after a confirmation: the candle after that closed beyond the confirming candle's
+               close (higher for bull, lower for bear) -> 'follow-through', else 'no
+               follow-through'; 'pending' when that candle is not there yet"""
+    o, h, lo, c = (df[k].to_numpy(float) for k in ("open", "high", "low", "close"))
+    n, out = len(df), []
+    for i in range(n):
+        d = "bull" if c[i] > o[i] else "bear" if c[i] < o[i] else "flat"
+        conf = foll = None
+        if d != "flat":
+            up = d == "bull"
+            if i + 1 >= n:
+                conf = "pending"
+            else:
+                ok = c[i + 1] > h[i] if up else c[i + 1] < lo[i]
+                conf = "confirmed" if ok else "not confirmed"
+                if ok:
+                    foll = "pending" if i + 2 >= n else (
+                        "follow-through" if (c[i + 2] > c[i + 1] if up else c[i + 2] < c[i + 1])
+                        else "no follow-through")
+        out.append({"dir": d, "confirm": conf, "follow": foll})
+    return out
+
+
 def _tf(tf: str) -> str:
     if tf not in TFS:
         raise HTTPException(400, f"tf must be one of {', '.join(TFS)}")
@@ -74,9 +103,11 @@ def compute(df: pd.DataFrame, tf: str) -> dict:
     last = {n: _f(ind[n].iloc[-1]) for n in ("ema20", "sma50", "vwap", "rsi")}
     names, on = np.array(candles.FLAGS), fl.to_numpy()
     chg = df.close.pct_change() * 100
+    hs = hindsight(df)
     return {
         "bars": [{"time": t[i], "open": _f(r.open), "high": _f(r.high), "low": _f(r.low),
-                  "close": _f(r.close), "volume": _f(r.volume), "chg_pct": _f(chg.iloc[i])}
+                  "close": _f(r.close), "volume": _f(r.volume), "chg_pct": _f(chg.iloc[i]),
+                  **hs[i]}
                  for i, r in enumerate(df.itertuples())],
         "lines": {n: [{"time": t[i], "value": _f(v)} for i, v in enumerate(ind[n]) if pd.notna(v)]
                   for n in LINES},
