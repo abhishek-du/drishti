@@ -3,7 +3,7 @@
 // zones and the trend all come from the read-only API (drishti.features); this file only draws.
 // Drawings are kept per stock and timeframe in this browser's localStorage (no DB writes).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Chart, dispose, init, KLineData, Overlay, OverlayCreate } from "klinecharts";
+import { Chart, dispose, Indicator, init, KLineData, Overlay, OverlayCreate } from "klinecharts";
 import { fmt, get } from "../api";
 import { LIVE_LABEL, LiveCandle, openLive } from "../live";
 import { CATALOG, DEFAULT_SET, Ext, Instance, Kind, PALETTE, PARAM_LABEL, Params, registerTemplates, TEMPLATE, title } from "./catalog";
@@ -61,7 +61,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const [pending, setPending] = useState<{ id: string; name: string } | null>(null);   // a tool being drawn
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
-  const [legend, setLegend] = useState<number | null>(null);
+  const [hover, setHover] = useState<{ i: number; x: number } | null>(null);   // the bar under the mouse
   const [, setTick] = useState(0);   // re-render the legend when a live candle arrives
   const [menu, setMenu] = useState<"" | "ind" | "settings" | "type">("");
   const [hstate, setHstate] = useState({ u: false, r: false });
@@ -88,15 +88,23 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
       subscribeBar: ({ callback }) => { liveCb.current = callback; },
       unsubscribeBar: () => { liveCb.current = null; },
     });
+    // v10 passes only the crosshair coordinates (x, y, paneId); the bar comes from x
     c.subscribeAction("onCrosshairChange", (x) => {
-      const i = (x as { dataIndex?: number; kLineData?: KLineData })?.kLineData ? (x as { dataIndex: number }).dataIndex : null;
-      setLegend(i);
+      const cr = (x ?? {}) as { x?: number; y?: number; paneId?: string };
+      if (typeof cr.x !== "number") { setHover(null); return; }
+      const pt = c.convertFromPixel([{ x: cr.x, y: cr.y ?? 0 }], { paneId: cr.paneId ?? "candle_pane" }) as { dataIndex?: number }[];
+      const n = c.getDataList().length;
+      const i = pt[0]?.dataIndex;
+      setHover(typeof i === "number" && n ? { i: Math.max(0, Math.min(n - 1, i)), x: cr.x } : null);
     });
+    const leave = () => setHover(null);
+    box.current.addEventListener("mouseleave", leave);
     const ro = new ResizeObserver(() => c.resize());
     ro.observe(box.current);
     const fs = () => setTimeout(() => c.resize(), 50);
     document.addEventListener("fullscreenchange", fs);
-    return () => { ro.disconnect(); document.removeEventListener("fullscreenchange", fs); dispose(c); chart.current = null; };
+    const el = box.current;
+    return () => { ro.disconnect(); el.removeEventListener("mouseleave", leave); document.removeEventListener("fullscreenchange", fs); dispose(c); chart.current = null; };
   }, []);
 
   useEffect(() => {
@@ -341,7 +349,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   // legend: OHLC + change of the hovered bar, else the last bar, from the chart's own data (so it
   // follows the live candles)
   const dl: KLineData[] = d ? (chart.current?.getDataList() ?? []) : [];
-  const li = legend !== null && legend >= 0 && legend < dl.length ? legend : dl.length - 1;
+  const li = hover && hover.i < dl.length ? hover.i : dl.length - 1;
   const lb = li >= 0 ? dl[li] : null;
   const prev = li > 0 ? dl[li - 1] : undefined;
   const chg = lb && prev ? lb.close - prev.close : null;
@@ -404,6 +412,8 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
               <span className="muted">Vol {(lb.volume ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
             </div>
           )}
+          {hover && lb && d && <BarCard d={d} k={lb} prev={prev} when={when} x={hover.x} width={box.current?.clientWidth ?? 0} live={live}
+            inds={chart.current?.getIndicators() ?? []} i={li} />}
           {layers.trend && d && (
             <div className={`kc-trend pill ${d.trend === "UP" ? "on" : d.trend === "DOWN" ? "off" : ""}`} title="Spec section 3 trend rule">
               Trend {d.tf}: {d.trend}{live ? " · live view" : ""}
@@ -420,6 +430,44 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
           {!d && !err && <p className="muted kc-err">Loading…</p>}
         </div>
       </div>
+    </div>
+  );
+}
+
+// floating details of the bar under the mouse (TradingView-style data window): values are the
+// chart's own data and the API's indicator results, only formatted here
+function BarCard({ d, k, prev, when, x, width, live, inds, i }: {
+  d: BarsData; k: KLineData; prev?: KLineData; when: string; x: number; width: number; live: boolean; inds: Indicator[]; i: number;
+}) {
+  const chg = prev ? k.close - prev.close : null;
+  const pats = d.candles.find((c) => ts(c.time) === k.timestamp)?.flags ?? [];
+  const W = 250;
+  const left = x + 18 + W > width ? Math.max(4, x - W - 18) : x + 18;
+  const rows: [string, string][] = [];
+  inds.forEach((ind) => {
+    const r = (ind.result as Record<string, number | undefined>[])[i] ?? {};
+    const vals = ind.figures.filter((f) => f.key !== "open" && f.key !== "close").map((f) => r[f.key]).filter((v): v is number => typeof v === "number");
+    if (ind.name === "VOL" || !vals.length) return;
+    const name = `${ind.shortName}${ind.calcParams.length ? ` ${ind.calcParams.join(", ")}` : ""}`;
+    const figs = ind.figures.filter((f) => typeof r[f.key] === "number");
+    rows.push([name, figs.map((f) => `${figs.length > 1 && f.title ? f.title.replace(/: $/, "") + " " : ""}${fmt(r[f.key] as number)}`).join(" · ")]);
+  });
+  return (
+    <div className="kc-card" style={{ left, width: W }}>
+      {live && <div className="pill warn" style={{ marginBottom: 4 }}>{LIVE_LABEL}</div>}
+      <b>{d.symbol} · {d.tf}{d.heikin_ashi ? " · Heikin Ashi" : ""}</b>
+      <div className="muted">{when}{d.tf === "1d" ? "" : " IST"}</div>
+      <table><tbody>
+        <tr><td>Open</td><td>{fmt(k.open)}</td></tr>
+        <tr><td>High</td><td>{fmt(k.high)}</td></tr>
+        <tr><td>Low</td><td>{fmt(k.low)}</td></tr>
+        <tr><td>Close</td><td>{fmt(k.close)}</td></tr>
+        <tr><td>Change</td><td style={{ color: (chg ?? 0) >= 0 ? "var(--up)" : "var(--down)" }}>{chg === null || !prev ? "–" : `${chg >= 0 ? "+" : ""}${fmt(chg)} (${fmt((100 * chg) / prev.close)}%)`}</td></tr>
+        <tr><td>Range</td><td>{fmt(k.high - k.low)}</td></tr>
+        <tr><td>Volume</td><td>{(k.volume ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</td></tr>
+        {rows.map(([a, v]) => <tr key={a}><td>{a}</td><td>{v}</td></tr>)}
+        {pats.length > 0 && <tr><td>Patterns</td><td>{pats.join(", ")}</td></tr>}
+      </tbody></table>
     </div>
   );
 }

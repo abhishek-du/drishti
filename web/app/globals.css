@@ -93,6 +93,14 @@ main:has(.stockpage) { max-width: none; padding: 10px 12px; }
 .kc-trend { position: absolute; z-index: 5; right: 8px; top: 2px; font-size: 11px; background: var(--bg); }
 .kc-livetag { position: absolute; z-index: 5; left: 8px; bottom: 30px; background: var(--bg); }
 .kc-err { position: absolute; left: 12px; top: 40px; }
+.kc-card { position: absolute; z-index: 7; top: 30px; pointer-events: none; font-size: 12px; line-height: 1.35;
+  background: color-mix(in srgb, var(--card) 94%, transparent); border: 1px solid var(--line); border-radius: 6px;
+  padding: 6px 8px; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.kc-card table { width: 100%; margin-top: 4px; }
+.kc-card td { padding: 1px 0; border: 0; white-space: normal; }
+.kc-card td:first-child { color: var(--muted); padding-right: 8px; white-space: nowrap; vertical-align: top; }
+.kc-card td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 480px) { .kc-card { top: 4px; width: 200px !important; } }
 .kc-hint { position: absolute; z-index: 6; left: 50%; transform: translateX(-50%); bottom: 34px; max-width: calc(100% - 24px);
   background: var(--accent); color: #fff; font-size: 12px; padding: 4px 10px; border-radius: 6px; pointer-events: none; text-align: center; }
 @media (max-width: 480px) {
