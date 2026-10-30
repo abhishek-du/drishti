@@ -3,7 +3,7 @@
 // zones and the trend all come from the read-only API (drishti.features); this file only draws.
 // Drawings are kept per stock and timeframe in this browser's localStorage (no DB writes).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Chart, dispose, init, KLineData, Overlay, OverlayCreate } from "klinecharts";
+import { Chart, dispose, Indicator, init, KLineData, Overlay, OverlayCreate } from "klinecharts";
 import { fmt, get } from "../api";
 import { LIVE_LABEL, LiveCandle, openLive } from "../live";
 import { CATALOG, DEFAULT_SET, Ext, Instance, Kind, PALETTE, PARAM_LABEL, Params, registerTemplates, TEMPLATE, title } from "./catalog";
@@ -58,7 +58,11 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const [magnet, setMagnet] = useState<Magnet>("weak_magnet");
   const [locked, setLocked] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
-  const [legend, setLegend] = useState<number | null>(null);
+  const [pending, setPending] = useState<{ id: string; name: string } | null>(null);   // a tool being drawn
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const [hover, setHover] = useState<{ i: number; x: number } | null>(null);   // the bar under the mouse
+  const [, setTick] = useState(0);   // re-render the legend when a live candle arrives
   const [menu, setMenu] = useState<"" | "ind" | "settings" | "type">("");
   const [hstate, setHstate] = useState({ u: false, r: false });
   const [ready, setReady] = useState(false);
@@ -84,15 +88,23 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
       subscribeBar: ({ callback }) => { liveCb.current = callback; },
       unsubscribeBar: () => { liveCb.current = null; },
     });
+    // v10 passes only the crosshair coordinates (x, y, paneId); the bar comes from x
     c.subscribeAction("onCrosshairChange", (x) => {
-      const i = (x as { dataIndex?: number; kLineData?: KLineData })?.kLineData ? (x as { dataIndex: number }).dataIndex : null;
-      setLegend(i);
+      const cr = (x ?? {}) as { x?: number; y?: number; paneId?: string };
+      if (typeof cr.x !== "number") { setHover(null); return; }
+      const pt = c.convertFromPixel([{ x: cr.x, y: cr.y ?? 0 }], { paneId: cr.paneId ?? "candle_pane" }) as { dataIndex?: number }[];
+      const n = c.getDataList().length;
+      const i = pt[0]?.dataIndex;
+      setHover(typeof i === "number" && n ? { i: Math.max(0, Math.min(n - 1, i)), x: cr.x } : null);
     });
+    const leave = () => setHover(null);
+    box.current.addEventListener("mouseleave", leave);
     const ro = new ResizeObserver(() => c.resize());
     ro.observe(box.current);
     const fs = () => setTimeout(() => c.resize(), 50);
     document.addEventListener("fullscreenchange", fs);
-    return () => { ro.disconnect(); document.removeEventListener("fullscreenchange", fs); dispose(c); chart.current = null; };
+    const el = box.current;
+    return () => { ro.disconnect(); el.removeEventListener("mouseleave", leave); document.removeEventListener("fullscreenchange", fs); dispose(c); chart.current = null; };
   }, []);
 
   useEffect(() => {
@@ -184,17 +196,19 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   }, [d, indKey]);
   useEffect(() => { if (ready) lsSet(LS.ind, inds); }, [indKey, ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // live 1m/5m: the forming candle from the WebSocket; history and indicators refresh every 15 s
+  // live 1m/5m: candles from the WebSocket every second (no page refresh); indicator values
+  // refresh every 10 s. Heikin Ashi candles come from the API, so they refresh every 10 s instead.
   useEffect(() => {
     if (!d || !isLive(d.tf)) return;
-    const close = openLive((msg) => {
+    const close = d.heikin_ashi ? () => {} : openLive((msg) => {
       const lastT = bars.current.length ? bars.current[bars.current.length - 1].timestamp : 0;
-      (msg.candles ?? []).filter((x: LiveCandle) => x.time * 1000 >= lastT && !d.heikin_ashi).forEach((x) =>
-        liveCb.current?.({ timestamp: x.time * 1000, open: x.open, high: x.high, low: x.low, close: x.close, volume: x.volume }));
+      const fresh = (msg.candles ?? []).filter((x: LiveCandle) => x.time * 1000 >= lastT);
+      fresh.forEach((x) => liveCb.current?.({ timestamp: x.time * 1000, open: x.open, high: x.high, low: x.low, close: x.close, volume: x.volume }));
+      if (fresh.length) setTick((t) => t + 1);
     }, d.key, d.tf === "5m" ? 5 : 1);
-    const iv = setInterval(() => setInds((x) => [...x]), 15000);
+    const iv = setInterval(() => { if (d.heikin_ashi) load(); else setInds((x) => [...x]); }, 10000);
     return () => { close(); clearInterval(iv); };
-  }, [d]);
+  }, [d, load]);
 
   // user drawings: snapshot, save, undo/redo
   const snapshot = useCallback((): Saved[] => (chart.current?.getOverlays({ groupId: USER }) ?? [])
@@ -208,6 +222,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   }, [d, snapshot]);
   const events = useCallback((): Partial<Overlay> => ({
     onDrawEnd: (e) => {
+      setPending(null); chart.current?.setScrollEnabled(true);
       if (e.overlay.name === "d_note") {
         const t = window.prompt("Note text", String(e.overlay.extendData ?? "")) ?? "";
         chart.current?.overrideOverlay({ id: e.overlay.id, extendData: t || "note" });
@@ -240,9 +255,46 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
     restore(s);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d?.key, d?.tf, d && bars.current.length > 0]);
+  const cancelDraw = useCallback(() => {
+    const p = pendingRef.current;
+    if (!p) return;
+    mute.current = true; chart.current?.removeOverlay({ id: p.id }); mute.current = false;
+    setPending(null); chart.current?.setScrollEnabled(true);
+  }, []);
   const draw = useCallback((name: string) => {
-    chart.current?.createOverlay({ name, groupId: USER, mode: magnet, lock: locked, ...events() } as OverlayCreate);
-  }, [magnet, locked, events]);
+    const c = chart.current;
+    if (!c) return;
+    cancelDraw();
+    const id = c.createOverlay({ name, groupId: USER, mode: magnet, lock: locked, ...events() } as OverlayCreate);
+    if (typeof id === "string") { setPending({ id, name }); c.setScrollEnabled(false); }   // no panning while drawing
+  }, [magnet, locked, events, cancelDraw]);
+
+  // drag-to-draw (TradingView habit): KLineChart adds a point only on a click (press and release
+  // at the same spot); a press-drag-release while drawing becomes a click at the press point and
+  // a click at the release point
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    let start: { x: number; y: number; target: EventTarget | null } | null = null;
+    let synth = false;
+    const fire = (t: EventTarget | null, type: string, x: number, y: number) =>
+      t?.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: type === "mousedown" ? 1 : 0, view: window }));
+    const onDown = (e: MouseEvent) => { if (!synth && pendingRef.current && e.button === 0) start = { x: e.clientX, y: e.clientY, target: e.target }; };
+    const onUp = (e: MouseEvent) => {
+      const s0 = start; start = null;
+      if (synth || !s0 || !pendingRef.current || Math.abs(e.clientX - s0.x) + Math.abs(e.clientY - s0.y) < 8) return;
+      synth = true;
+      setTimeout(() => {
+        fire(s0.target, "mousedown", s0.x, s0.y); fire(s0.target, "mouseup", s0.x, s0.y);
+        fire(s0.target, "mousemove", e.clientX, e.clientY);
+        if (pendingRef.current) { fire(s0.target, "mousedown", e.clientX, e.clientY); fire(s0.target, "mouseup", e.clientX, e.clientY); }
+        synth = false;
+      }, 0);
+    };
+    el.addEventListener("mousedown", onDown, true);
+    window.addEventListener("mouseup", onUp, true);
+    return () => { el.removeEventListener("mousedown", onDown, true); window.removeEventListener("mouseup", onUp, true); };
+  }, []);
   const undo = () => { const s = hist.current.undo(); if (s && d) { restore(s); saveDrawings(d.key, d.tf, s); } setHstate({ u: hist.current.canUndo, r: hist.current.canRedo }); };
   const redo = () => { const s = hist.current.redo(); if (s && d) { restore(s); saveDrawings(d.key, d.tf, s); } setHstate({ u: hist.current.canUndo, r: hist.current.canRedo }); };
   const clearAll = () => {
@@ -255,8 +307,8 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   }, [magnet, locked]);
 
   // keyboard shortcuts
-  const latest = useRef({ draw, undo, redo, sel });
-  latest.current = { draw, undo, redo, sel };
+  const latest = useRef({ draw, undo, redo, sel, cancelDraw });
+  latest.current = { draw, undo, redo, sel, cancelDraw };
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
@@ -269,6 +321,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
       }
       if ((e.ctrlKey || e.metaKey) && e.code === "KeyZ") { e.preventDefault(); if (e.shiftKey) L.redo(); else L.undo(); return; }
       if ((e.ctrlKey || e.metaKey) && e.code === "KeyY") { e.preventDefault(); L.redo(); return; }
+      if (e.key === "Escape" && pendingRef.current) { L.cancelDraw(); return; }
       if ((e.key === "Delete" || e.key === "Backspace") && L.sel) {
         e.preventDefault();
         chart.current?.removeOverlay({ id: L.sel }); setSel(null);
@@ -293,11 +346,14 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const setLayersP = (l: Layers) => { setLayers(l); lsSet(LS.layers, l); };
   const setThemeP = (t: "light" | "dark") => { setTheme(t); lsSet(LS.theme, t); };
 
-  // legend (OHLC + change of the hovered bar, else the last bar)
-  const lb = d && d.bars.length ? d.bars[legend !== null && legend >= 0 && legend < d.bars.length ? legend : d.bars.length - 1] : null;
-  const prev = d && lb ? d.bars[d.bars.indexOf(lb) - 1] : undefined;
+  // legend: OHLC + change of the hovered bar, else the last bar, from the chart's own data (so it
+  // follows the live candles)
+  const dl: KLineData[] = d ? (chart.current?.getDataList() ?? []) : [];
+  const li = hover && hover.i < dl.length ? hover.i : dl.length - 1;
+  const lb = li >= 0 ? dl[li] : null;
+  const prev = li > 0 ? dl[li - 1] : undefined;
   const chg = lb && prev ? lb.close - prev.close : null;
-  const when = lb ? (typeof lb.time === "number" ? new Date((lb.time + 19800) * 1000).toISOString().slice(0, 16).replace("T", " ") : lb.time) : "";
+  const when = lb ? new Date(lb.timestamp + 19800e3).toISOString().slice(0, d?.tf === "1d" ? 10 : 16).replace("T", " ") : "";
   const tvUrl = d?.symbol ? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`NSE:${d.symbol}`)}` : null;
   const live = isLive(tf);
 
@@ -335,7 +391,8 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
       )}
       <div className="kc-body">
         <div className="kc-tools" role="toolbar" aria-label="Drawing tools">
-          {TOOLS.map((t) => <button key={t.name} title={t.label} onClick={() => draw(t.name)}>{t.icon}</button>)}
+          {TOOLS.map((t) => <button key={t.name} title={t.label} className={pending?.name === t.name ? "sel" : ""} aria-pressed={pending?.name === t.name}
+            onClick={() => (pending?.name === t.name ? cancelDraw() : draw(t.name))}>{t.icon}</button>)}
           <hr />
           <button title={`Magnet: ${magnet === "normal" ? "off" : magnet === "weak_magnet" ? "weak" : "strong"}`} className={magnet !== "normal" ? "sel" : ""}
             onClick={() => setMagnet(magnet === "normal" ? "weak_magnet" : magnet === "weak_magnet" ? "strong_magnet" : "normal")}>🧲</button>
@@ -351,20 +408,66 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
             <div className="kc-legend">
               <b>{d.symbol} · {d.tf}{d.heikin_ashi ? " · Heikin Ashi" : ""}</b> <span className="muted">{when}</span>{" "}
               O <b>{fmt(lb.open)}</b> H <b>{fmt(lb.high)}</b> L <b>{fmt(lb.low)}</b> C <b>{fmt(lb.close)}</b>{" "}
-              <span style={{ color: (chg ?? 0) >= 0 ? "var(--up)" : "var(--down)" }}>{chg === null ? "" : `${chg >= 0 ? "+" : ""}${fmt(chg)} (${fmt(lb.chg_pct)}%)`}</span>{" "}
-              <span className="muted">Vol {lb.volume.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
+              <span style={{ color: (chg ?? 0) >= 0 ? "var(--up)" : "var(--down)" }}>{chg === null || !prev ? "" : `${chg >= 0 ? "+" : ""}${fmt(chg)} (${fmt((100 * chg) / prev.close)}%)`}</span>{" "}
+              <span className="muted">Vol {(lb.volume ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
             </div>
           )}
+          {hover && lb && d && <BarCard d={d} k={lb} prev={prev} when={when} x={hover.x} width={box.current?.clientWidth ?? 0} live={live}
+            inds={chart.current?.getIndicators() ?? []} i={li} />}
           {layers.trend && d && (
             <div className={`kc-trend pill ${d.trend === "UP" ? "on" : d.trend === "DOWN" ? "off" : ""}`} title="Spec section 3 trend rule">
               Trend {d.tf}: {d.trend}{live ? " · live view" : ""}
             </div>
           )}
           {live && <span className="pill warn kc-livetag">{LIVE_LABEL}</span>}
+          {pending && (
+            <div className="kc-hint">
+              {TOOLS.find((t) => t.name === pending.name)?.label.replace(/ \(.*\)$/, "")}: click the start point, then the end point (or drag)
+              {pending.name === "parallelStraightLine" ? ", then click once more for the channel width" : ""} · Esc cancels
+            </div>
+          )}
           {err && <p className="muted kc-err">{err}</p>}
           {!d && !err && <p className="muted kc-err">Loading…</p>}
         </div>
       </div>
+    </div>
+  );
+}
+
+// floating details of the bar under the mouse (TradingView-style data window): values are the
+// chart's own data and the API's indicator results, only formatted here
+function BarCard({ d, k, prev, when, x, width, live, inds, i }: {
+  d: BarsData; k: KLineData; prev?: KLineData; when: string; x: number; width: number; live: boolean; inds: Indicator[]; i: number;
+}) {
+  const chg = prev ? k.close - prev.close : null;
+  const pats = d.candles.find((c) => ts(c.time) === k.timestamp)?.flags ?? [];
+  const W = 250;
+  const left = x + 18 + W > width ? Math.max(4, x - W - 18) : x + 18;
+  const rows: [string, string][] = [];
+  inds.forEach((ind) => {
+    const r = (ind.result as Record<string, number | undefined>[])[i] ?? {};
+    const vals = ind.figures.filter((f) => f.key !== "open" && f.key !== "close").map((f) => r[f.key]).filter((v): v is number => typeof v === "number");
+    if (ind.name === "VOL" || !vals.length) return;
+    const name = `${ind.shortName}${ind.calcParams.length ? ` ${ind.calcParams.join(", ")}` : ""}`;
+    const figs = ind.figures.filter((f) => typeof r[f.key] === "number");
+    rows.push([name, figs.map((f) => `${figs.length > 1 && f.title ? f.title.replace(/: $/, "") + " " : ""}${fmt(r[f.key] as number)}`).join(" · ")]);
+  });
+  return (
+    <div className="kc-card" style={{ left, width: W }}>
+      {live && <div className="pill warn" style={{ marginBottom: 4 }}>{LIVE_LABEL}</div>}
+      <b>{d.symbol} · {d.tf}{d.heikin_ashi ? " · Heikin Ashi" : ""}</b>
+      <div className="muted">{when}{d.tf === "1d" ? "" : " IST"}</div>
+      <table><tbody>
+        <tr><td>Open</td><td>{fmt(k.open)}</td></tr>
+        <tr><td>High</td><td>{fmt(k.high)}</td></tr>
+        <tr><td>Low</td><td>{fmt(k.low)}</td></tr>
+        <tr><td>Close</td><td>{fmt(k.close)}</td></tr>
+        <tr><td>Change</td><td style={{ color: (chg ?? 0) >= 0 ? "var(--up)" : "var(--down)" }}>{chg === null || !prev ? "–" : `${chg >= 0 ? "+" : ""}${fmt(chg)} (${fmt((100 * chg) / prev.close)}%)`}</td></tr>
+        <tr><td>Range</td><td>{fmt(k.high - k.low)}</td></tr>
+        <tr><td>Volume</td><td>{(k.volume ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</td></tr>
+        {rows.map(([a, v]) => <tr key={a}><td>{a}</td><td>{v}</td></tr>)}
+        {pats.length > 0 && <tr><td>Patterns</td><td>{pats.join(", ")}</td></tr>}
+      </tbody></table>
     </div>
   );
 }

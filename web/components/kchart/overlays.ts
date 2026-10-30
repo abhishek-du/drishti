@@ -15,7 +15,7 @@ export const TOOLS: Tool[] = [
 ];
 
 type Coord = { x: number; y: number };
-type Pt = { value?: number; dataIndex?: number; timestamp?: number };
+type Pt = { value?: number };
 
 const rect: OverlayTemplate = {
   name: "d_rect", totalStep: 3, needDefaultPointFigure: true, needDefaultXAxisFigure: true, needDefaultYAxisFigure: true,
@@ -35,9 +35,8 @@ const measure: OverlayTemplate = {
     const [p, q] = overlay.points as Pt[];
     if (p?.value === undefined || q?.value === undefined) return [];
     const d = q.value - p.value, up = d >= 0;
-    const dl = chart.getDataList();   // restored points carry only timestamps
-    const idx = (x: Pt) => { const i = x.timestamp === undefined ? -1 : dl.findIndex((k) => k.timestamp === x.timestamp); return i >= 0 ? i : (x.dataIndex ?? 0); };
-    const bars = idx(q) - idx(p);
+    // bars from the on-screen distance, so a point in the empty space after the last bar counts too
+    const bars = Math.round((b.x - a.x) / chart.getBarSpace().bar);
     const color = up ? "rgba(18,128,92,.15)" : "rgba(192,54,44,.15)";
     return [
       { type: "rect", attrs: { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) }, styles: { style: "fill", color } },

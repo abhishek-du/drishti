@@ -46,11 +46,15 @@ pre { white-space: pre-wrap; word-break: break-word; }
 button.sel { font-weight: 700; border-color: var(--accent); color: var(--accent); }
 .trends { gap: 6px; font-size: 13px; }
 .toggles { gap: 8px 12px; margin-bottom: 6px; }
-.chartgrid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
+.chartgrid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(240px, 18vw, 320px); gap: 12px; align-items: start; }
+/* the stock page uses the whole window width (other pages keep the 1400 px column) */
+main:has(.stockpage) { max-width: none; padding: 10px 12px; }
+.bias > .pill { display: table; }
 .bias ul { margin: 6px 0 0; padding-left: 18px; }
 .bias li { margin-bottom: 4px; }
 .small { font-size: 12px; }
-@media (max-width: 900px) { .chartgrid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 1100px) { .chartgrid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 1100px) { .kc-body { height: calc(100vh - 220px); } }
 @media (max-width: 480px) { main { padding: 10px; } .search ul { min-width: 0; width: calc(100vw - 32px); } }
 
 /* TradingView-style chart (components/kchart) */
@@ -76,7 +80,7 @@ button.sel { font-weight: 700; border-color: var(--accent); color: var(--accent)
 .kc-ind { flex-direction: column; flex-wrap: nowrap; align-items: stretch; max-height: 50vh; overflow: auto; }
 .kc-ind-list { display: flex; flex-wrap: wrap; gap: 4px; }
 .kc-ind-row { gap: 6px 10px; }
-.kc-body { display: flex; height: min(72vh, 680px); min-height: 380px; }
+.kc-body { display: flex; height: calc(100vh - 250px); min-height: 420px; max-height: 1100px; }
 .kc:fullscreen .kc-body { flex: 1; height: auto; }
 .kc-tools { display: flex; flex-direction: column; gap: 2px; padding: 4px 2px; border-right: 1px solid var(--line); overflow-y: auto; flex: none; }
 .kc-tools hr { width: 100%; border: 0; border-top: 1px solid var(--line); margin: 2px 0; }
@@ -89,10 +93,28 @@ button.sel { font-weight: 700; border-color: var(--accent); color: var(--accent)
 .kc-trend { position: absolute; z-index: 5; right: 8px; top: 2px; font-size: 11px; background: var(--bg); }
 .kc-livetag { position: absolute; z-index: 5; left: 8px; bottom: 30px; background: var(--bg); }
 .kc-err { position: absolute; left: 12px; top: 40px; }
+.kc-card { position: absolute; z-index: 7; top: 30px; pointer-events: none; font-size: 12px; line-height: 1.35;
+  background: color-mix(in srgb, var(--card) 94%, transparent); border: 1px solid var(--line); border-radius: 6px;
+  padding: 6px 8px; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.kc-card table { width: 100%; margin-top: 4px; }
+.kc-card td { padding: 1px 0; border: 0; white-space: normal; }
+.kc-card td:first-child { color: var(--muted); padding-right: 8px; white-space: nowrap; vertical-align: top; }
+.kc-card td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 480px) { .kc-card { top: 4px; width: 200px !important; } }
+.kc-hint { position: absolute; z-index: 6; left: 50%; transform: translateX(-50%); bottom: 34px; max-width: calc(100% - 24px);
+  background: var(--accent); color: #fff; font-size: 12px; padding: 4px 10px; border-radius: 6px; pointer-events: none; text-align: center; }
 @media (max-width: 480px) {
-  .kc-body { height: 62vh; min-height: 340px; }
+  .kc-body { height: 64vh; min-height: 340px; }
   .kc-tools button { width: 28px; height: 26px; font-size: 13px; }
   .kc-canvas { top: 54px; }
   .kc-legend { right: 8px; top: 20px; white-space: normal; line-height: 1.35; }
   .kc-trend { top: 1px; right: auto; left: 8px; }
 }
+
+/* watchlist table: compact so it fits at 1300 px; scrolls inside its own box on small screens */
+.scroll.wl { max-width: 100%; }
+.wl table { font-size: 13px; }
+.wl th, .wl td { padding: 5px 6px; }
+.wl th { line-height: 1.2; vertical-align: bottom; }
+.wl td { line-height: 1.25; }
+.wl td.clip { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
