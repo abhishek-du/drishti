@@ -140,6 +140,14 @@ async def main(cmd: str, args: list[str]) -> dict:
                 out = await barcheck(s, args)
             else:
                 raise SystemExit(__doc__)
+        except SystemExit as e:
+            if str(e).startswith("REFUSED"):           # a guard said no: a no-op, not a failure
+                await s.rollback()
+                await runlog.end(s, rid, "NOOP", {"refused": str(e)[:300]})
+                return {"refused": str(e)}
+            await s.rollback()
+            await runlog.end(s, rid, "FAILED", error=f"SystemExit: {e}"[:500])
+            raise
         except BaseException as e:
             await s.rollback()
             await runlog.end(s, rid, "FAILED", error=f"{type(e).__name__}: {e}"[:500])
