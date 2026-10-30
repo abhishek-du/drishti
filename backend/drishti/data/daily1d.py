@@ -39,6 +39,8 @@ async def universe(s) -> list[str]:
 
 
 async def fetch_store(s, rid, api, keys: list[str], to: _dt.date) -> dict:
+    """Bars after `to` in a response are not stored (a night fetch can carry today's
+    unfinished bar)."""
     frm = to - _dt.timedelta(days=LOOKBACK)
     basis = now().date()
     c = {"keys": len(keys), "ok": 0, "empty": 0, "errors": 0, "candles": 0}
@@ -54,7 +56,7 @@ async def fetch_store(s, rid, api, keys: list[str], to: _dt.date) -> dict:
              "e": None if r.status_code == 200 else body[:300].decode(errors="replace")})).scalar()
         ts = (await s.execute(text("select fetched_at from bar_1d_payload where id = :i"),
                               {"i": pid})).scalar()
-        for row in indices.parse_candles(cs):
+        for row in (r_ for r_ in indices.parse_candles(cs) if r_["session_date"] <= to):
             raw = next(x for x in cs if x[0][:10] == str(row["session_date"]))
             await s.execute(text("""insert into bar_1d(payload_id, instrument_key, session_date,
                 open, high, low, close, volume, oi, fetched_at) values (:p, :k, :d, :o, :h, :l,

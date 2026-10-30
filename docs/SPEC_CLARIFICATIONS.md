@@ -154,3 +154,18 @@ It is a clarification, not v2. It is built in P5 (Risk Manager) and listed in `F
 **Status: PENDING the probe.**
 - If the verdict is "AVAILABLE", SC6a is built in P5 together with SC3.
 - If not, SC6a is **skipped**, noted here, and the T-day band test (SC6) is the only band rule.
+
+### SC5/SC6 correction (2026-10-30): F&O stocks have no price band
+
+**Found in the morning check of 2026-10-30.**
+- In the 15:40 snapshot of 2026-10-29, Upstox's circuit limits put large F&O stocks (INFY, RELIANCE, BHARTIARTL, TCS, SBIN …) at ±5 %.
+- Earlier the same day, RELIANCE was ±10 % at 14:xx.
+- F&O stocks have **no fixed price band**: their limits are a dynamic operating range.
+- So Scout's 10-29 run wrongly left out 125 of the 471 eligible names as "5 % band".
+
+**Fix:**
+- Drishti's master now marks every NSE_EQ instrument with `fo`: it is an underlying of an NSE_FO equity contract, from the same public master file. There were 218 on 2026-10-30.
+- An F&O stock's band is **None (no band)**. It is never band-excluded in Scout (SC5), and never `BAND_VETO`'d or `BAND_VETO_T1`'d in P5 (SC6/SC6a).
+- The Scout funnel records `band_fo_exempt`.
+- The 10-29 Scout was re-run with the fix. It is append-only, so the newer run is the one used: 3 names band-excluded instead of 125; 55 listed instead of 49.
+- No trading rule of drishti-swing-v1 changes.

@@ -17,7 +17,7 @@ from sqlalchemy import text
 from drishti.core import runlog
 from drishti.core.clock import now, today
 from drishti.core.db import prajna_sessionmaker, sessionmaker
-from drishti.data import bars, eod_quotes, holidays, manual
+from drishti.data import bars, eod_quotes, holidays, manual, master
 from drishti.data.holidays import SHORT_SESSIONS
 from drishti.scout import screener_b as sb
 
@@ -60,8 +60,12 @@ async def scout(s, ps, day: _dt.date) -> dict:
                    order by r.started_at limit 1)
         select instrument_key, upper_circuit, lower_circuit, last_price, net_change
         from eod_quote where run_id = (select run_id from r)"""), {"d": day})).all()
-    bands = {k: eod_quotes.band_pct(u, lo, lp, nc) for k, u, lo, lp, nc in q}
+    fo = {k for k, a in (await master.state(s)).items() if a.get("fo")}
+    # F&O stocks have no fixed price band; their circuit limits are a dynamic operating range
+    # (and after the close Upstox shows them as +-5 %), so they are never band-excluded (SC5)
+    bands = {k: None if k in fo else eod_quotes.band_pct(u, lo, lp, nc) for k, u, lo, lp, nc in q}
     listed, funnel = sb.screen(st, eq, blocked, reg, day, bands)
+    funnel["band_fo_exempt"] = int(st.index.isin(list(fo)).sum())
     window = await next_sessions(s, day, 6)
     res = dict((await ps.execute(text("""select instrument_key, min(meeting_date) from results_event
         where kind = 'INTIMATION' and meeting_date between :a and :b and knowable_at < :t

@@ -17,7 +17,9 @@ from sqlalchemy import text
 URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
 KEEP = ("NSE_EQ", "NSE_INDEX")
 ATTRS = ("segment", "instrument_type", "trading_symbol", "name", "isin", "lot_size", "tick_size",
-         "exchange_token", "security_type", "freeze_quantity")
+         "exchange_token", "security_type", "freeze_quantity", "fo")
+# "fo": the stock is an underlying of NSE equity derivatives (an NSE_FO row with underlying_type
+# EQUITY points at it). F&O stocks have no fixed price band (SC5/SC6 correction 2026-10-30).
 
 
 def download(client: httpx.Client | None = None) -> bytes:
@@ -29,7 +31,10 @@ def download(client: httpx.Client | None = None) -> bytes:
 
 def parse(raw: bytes) -> tuple[int, dict[str, dict]]:
     rows = json.loads(gzip.decompress(raw))
-    kept = {r["instrument_key"]: {a: r.get(a) for a in ATTRS}
+    fo = {r.get("underlying_key") for r in rows
+          if r.get("segment") == "NSE_FO" and r.get("underlying_type") == "EQUITY"}
+    kept = {r["instrument_key"]: {**{a: r.get(a) for a in ATTRS if a != "fo"},
+                                  "fo": r["instrument_key"] in fo}
             for r in rows if r.get("segment") in KEEP and r.get("instrument_key")}
     return len(rows), kept
 
