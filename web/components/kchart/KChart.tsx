@@ -34,7 +34,7 @@ type Layers = { zones: boolean; patterns: "bullish" | "all" | "off"; trend: bool
 type Magnet = "normal" | "weak_magnet" | "strong_magnet";
 
 export const ts = (t: string | number) => (typeof t === "number" ? t * 1000 : Date.parse(`${t}T00:00:00+05:30`));
-const LS = { ind: "drishti.chart.ind.v1", ctype: "drishti.chart.ctype", scale: "drishti.chart.scale", layers: "drishti.chart.layers", theme: "drishti.theme", magnet: "drishti.chart.magnet" };
+const LS = { ind: "drishti.chart.ind.v1", ctype: "drishti.chart.ctype", scale: "drishti.chart.scale", layers: "drishti.chart.layers", theme: "drishti.theme.v1", magnet: "drishti.chart.magnet" };
 function ls<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); return v ? (JSON.parse(v) as T) : d; } catch { return d; } }
 function lsSet(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked */ } }
 const qs = (o: Record<string, string | number | boolean>) => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&");
@@ -55,7 +55,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const [scale, setScale] = useState<Scale>("normal");
   const [layers, setLayers] = useState<Layers>({ zones: true, patterns: "bullish", trend: true });
   const [inds, setInds] = useState<Instance[]>(DEFAULT_SET);
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [magnet, setMagnet] = useState<Magnet>("weak_magnet");
   const [locked, setLocked] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
@@ -76,10 +76,19 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   useEffect(() => {
     setCtype(ls(LS.ctype, "candle_solid")); setScale(ls(LS.scale, "normal")); setInds(ls(LS.ind, DEFAULT_SET));
     setLayers({ zones: true, patterns: "bullish", trend: true, ...ls(LS.layers, {}) }); setMagnet(ls(LS.magnet, "weak_magnet"));
-    setTheme(ls<"light" | "dark" | null>(LS.theme, null) ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+    const savedTheme = ls<"light" | "dark" | null>(LS.theme, null);
+    setTheme(savedTheme || "dark");
     setReady(true);
   }, []);
-  useEffect(() => { if (ready) document.documentElement.dataset.theme = theme; }, [theme, ready]);
+  useEffect(() => { if (ready) document.documentElement.setAttribute("data-theme", theme); }, [theme, ready]);
+  useEffect(() => {
+    const onTheme = (e: Event) => {
+      const t = (e as CustomEvent<"light" | "dark">).detail;
+      if (t === "light" || t === "dark") setTheme(t);
+    };
+    window.addEventListener("drishti:theme", onTheme);
+    return () => window.removeEventListener("drishti:theme", onTheme);
+  }, []);
 
   // the chart itself
   useEffect(() => {
@@ -374,7 +383,12 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const setType = (t: CType) => { setCtype(t); lsSet(LS.ctype, t); setMenu(""); };
   const setScaleP = (s: Scale) => { setScale(s); lsSet(LS.scale, s); };
   const setLayersP = (l: Layers) => { setLayers(l); lsSet(LS.layers, l); };
-  const setThemeP = (t: "light" | "dark") => { setTheme(t); lsSet(LS.theme, t); };
+  const setThemeP = (t: "light" | "dark") => {
+    setTheme(t);
+    lsSet(LS.theme, t);
+    document.documentElement.setAttribute("data-theme", t);
+    window.dispatchEvent(new CustomEvent("drishti:theme", { detail: t }));
+  };
 
   useEffect(() => { if (pinned !== null && (!hover || hover.i !== pinned)) setPinned(null); }, [hover, pinned]);
 
