@@ -30,6 +30,14 @@ async def trading_day(s, d: _dt.date) -> bool:
     return holidays.is_session(d, await holidays.latest(s, d))
 
 
+async def previous_session(s, d: _dt.date) -> _dt.date:
+    """The last regular session strictly before d (SC1 rules)."""
+    while True:
+        d -= _dt.timedelta(days=1)
+        if holidays.is_session(d, await holidays.latest(s, d)):
+            return d
+
+
 async def eod(s, rid, day: _dt.date, keys: list[str], rows: list[dict],
               index_rows: list[dict] = ()) -> dict:
     """Store the provisional bars of `day`: only quotes whose last trade is on `day`, and none at
@@ -123,8 +131,10 @@ async def main(cmd: str, args: list[str]) -> dict:
                 if not daily1d.a_rule_ok(now()):
                     raise SystemExit("REFUSED: decision A: historical API only 22:00-05:30 IST "
                                      "until the switch")
+                # default: the previous session. Upstox serves a bar for T at night, but its close
+                # is not final until the next morning (2026-10-29: 33 of 55 night bars differed)
                 to = _dt.date.fromisoformat(args[args.index("--to") + 1]) if "--to" in args \
-                    else today()
+                    else await previous_session(s, today())
                 keys = await daily1d.universe(s)
                 if "--limit" in args:
                     keys = keys[:int(args[args.index("--limit") + 1])]
@@ -133,13 +143,22 @@ async def main(cmd: str, args: list[str]) -> dict:
             elif cmd == "compare1d":
                 from sqlalchemy import text
                 day = _dt.date.fromisoformat(args[args.index("--date") + 1]) if "--date" in args \
-                    else (await s.execute(text("select max(session_date) from bar_1d"))).scalar()
+                    else (await s.execute(text("""select max(session_date) from bar_1d
+                        where session_date < :t"""), {"t": today()})).scalar()
                 async with prajna_sessionmaker()() as ps:
                     out = await daily1d.compare_with_prajna(s, ps, day)
             elif cmd == "barcheck":
                 out = await barcheck(s, args)
             else:
                 raise SystemExit(__doc__)
+        except SystemExit as e:
+            if str(e).startswith("REFUSED"):           # a guard said no: a no-op, not a failure
+                await s.rollback()
+                await runlog.end(s, rid, "NOOP", {"refused": str(e)[:300]})
+                return {"refused": str(e)}
+            await s.rollback()
+            await runlog.end(s, rid, "FAILED", error=f"SystemExit: {e}"[:500])
+            raise
         except BaseException as e:
             await s.rollback()
             await runlog.end(s, rid, "FAILED", error=f"{type(e).__name__}: {e}"[:500])

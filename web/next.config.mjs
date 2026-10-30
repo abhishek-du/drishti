@@ -1,8 +1,10 @@
-// The browser talks only to Next (127.0.0.1:3100); /api/* is proxied to the read-only
-// FastAPI on 127.0.0.1:8700. PAPER ONLY: no endpoint places anything.
+// The browser talks only to Next; /api/* is proxied to the read-only FastAPI, by default
+// 127.0.0.1:8700 (NEXT_PUBLIC_DRISHTI_API overrides it, e.g. http://127.0.0.1:8710 for a track's
+// dev server). PAPER ONLY: no endpoint places anything.
+const API = process.env.NEXT_PUBLIC_DRISHTI_API || "http://127.0.0.1:8700";
 const nextConfig = {
   async rewrites() {
-    return [{ source: "/api/:path*", destination: "http://127.0.0.1:8700/api/:path*" }];
+    return [{ source: "/api/:path*", destination: `${API}/api/:path*` }];
   },
 };
 export default nextConfig;

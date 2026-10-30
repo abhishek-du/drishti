@@ -8,7 +8,7 @@
     "start": "next start -H 127.0.0.1 -p 3100"
   },
   "dependencies": {
-    "lightweight-charts": "5.0.8",
+    "klinecharts": "10.1.0",
     "next": "15.5.28",
     "react": "19.1.0",
     "react-dom": "19.1.0"
