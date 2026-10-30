@@ -6,8 +6,8 @@
 /api/chart2/indicator?key=&tf=&kind=&...    one indicator with the user's parameters (the chart's
                                             indicators menu); kinds in INDICATORS
 
-Indicators and patterns come only from drishti.features (supertrend from chart_stubs until Track B
-lands it). 1m/5m are LIVE VIEW: not used by drishti-swing-v1.
+Indicators and patterns come only from drishti.features. 1m/5m are LIVE VIEW: not used by
+drishti-swing-v1.
 Blind rule: no outcome or P&L of any signal or watchlist entry is served here.
 """
 
@@ -18,7 +18,6 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
-from drishti.api import chart_stubs as stubs
 from drishti.api.chart_bias import bias
 from drishti.api.chart_data import TFS, load
 from drishti.core.db import prajna_sessionmaker, sessionmaker
@@ -162,7 +161,7 @@ INDICATORS = ("ema", "sma", "vwap", "bb", "rsi", "macd", "atr", "supertrend")
 
 def indicator(df: pd.DataFrame, tf: str, kind: str, n: int, k: float, fast: int, slow: int,
               signal: int, mult: float) -> dict[str, pd.Series]:
-    """One indicator with the given parameters, from drishti.features (stubs until Track B)."""
+    """One indicator with the given parameters, from drishti.features."""
     df = df.reset_index(drop=True)
     g = pd.Series(0, index=df.index)
     if kind == "ema":
@@ -183,7 +182,7 @@ def indicator(df: pd.DataFrame, tf: str, kind: str, n: int, k: float, fast: int,
         return dict(indicators.macd(df, fast=fast, slow=slow, signal=signal).items())
     if kind == "atr":
         return {"atr": indicators.atr(df, n=n)}
-    return dict(stubs.supertrend(df, n=n, mult=mult).items())
+    return dict(indicators.supertrend(df, n=n, mult=mult).items())
 
 
 @router.get("/indicator")

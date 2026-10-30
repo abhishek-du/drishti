@@ -66,7 +66,8 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const [pinned, setPinned] = useState<number | null>(null);   // the bar whose details card is open (opened by a click)
   const hoverRef = useRef(hover);
   hoverRef.current = hover;
-  const [, setTick] = useState(0);   // re-render the legend when a live candle arrives
+  const [, setTick] = useState(0);              // re-render the legend when a live candle arrives
+  const [indTick, setIndTick] = useState(0);     // re-fetch indicator values from API on 10s interval
   const [menu, setMenu] = useState<"" | "ind" | "settings" | "type">("");
   const [hstate, setHstate] = useState({ u: false, r: false });
   const [ready, setReady] = useState(false);
@@ -200,7 +201,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
     });
     return () => { dead = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [d, indKey]);
+  }, [d, indKey, indTick]);
   useEffect(() => { if (ready) lsSet(LS.ind, inds); }, [indKey, ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // live 1m/5m: candles from the WebSocket every second (no page refresh); indicator values
@@ -210,17 +211,39 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
     const close = d.heikin_ashi ? () => {} : openLive((msg) => {
       const lastT = bars.current.length ? bars.current[bars.current.length - 1].timestamp : 0;
       const fresh = (msg.candles ?? []).filter((x: LiveCandle) => x.time * 1000 >= lastT);
-      fresh.forEach((x) => liveCb.current?.({ timestamp: x.time * 1000, open: x.open, high: x.high, low: x.low, close: x.close, volume: x.volume }));
+      fresh.forEach((x) => {
+        const k: KLineData = {
+          timestamp: x.time * 1000,
+          open: x.open,
+          high: x.high,
+          low: x.low,
+          close: x.close,
+          volume: x.volume,
+          ...(x.vwap != null ? { vwap: x.vwap } : {}),
+        } as any;
+        const last = bars.current[bars.current.length - 1];
+        if (last && last.timestamp === k.timestamp) {
+          bars.current[bars.current.length - 1] = k;
+        } else if (!last || k.timestamp > last.timestamp) {
+          bars.current.push(k);
+        }
+        liveCb.current?.(k);
+      });
       if (fresh.length) setTick((t) => t + 1);
     }, d.key, d.tf === "5m" ? 5 : 1);
-    const iv = setInterval(() => { if (d.heikin_ashi) load(); else setInds((x) => [...x]); }, 10000);
+    const iv = setInterval(() => { if (d.heikin_ashi) load(); else setIndTick((t) => t + 1); }, 10000);
     return () => { close(); clearInterval(iv); };
   }, [d, load]);
 
   // user drawings: snapshot, save, undo/redo
   const snapshot = useCallback((): Saved[] => (chart.current?.getOverlays({ groupId: USER }) ?? [])
     .filter((o) => o.points.length >= o.totalStep - 1)
-    .map((o) => ({ name: o.name, points: o.points.map((p) => ({ timestamp: p.timestamp, value: p.value })), extendData: o.extendData, lock: o.lock })), []);
+    .map((o) => ({
+      name: o.name,
+      points: o.points.map((p) => ({ timestamp: p.timestamp, dataIndex: p.dataIndex, value: p.value })),
+      extendData: o.extendData,
+      lock: o.lock,
+    })), []);
   const commit = useCallback(() => {
     if (mute.current || !d) return;
     const s = snapshot();
