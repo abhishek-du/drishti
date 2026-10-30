@@ -50,13 +50,13 @@ export default function Watchlist() {
       </div>
       <p className="muted" style={{ marginTop: 0 }}>A watchlist is context, not a signal. Outcomes are hidden until the look (blind rule).
         {" "}<span className={`pill ${stale(live?.summary.updated_at) ? "" : "on"}`}>{LIVE_LABEL}: {stale(live?.summary.updated_at) ? "not running" : "live"}</span></p>
-      <div className="scroll">
+      <div className="scroll wl">
         <table>
           <thead><tr>
             <th className="num">#</th><th>Symbol</th><th>Event</th><th className="num">RS</th><th className="num">Close</th>
-            <th className="num">ATR %</th><th className="num">From 52w high</th><th className="num">RSI</th>
-            <th className="num">Vol/50d</th><th>Candle (T)</th><th>Results</th>
-            <th className="num" title={LIVE_LABEL}>Live LTP</th><th className="num" title={LIVE_LABEL}>Live %</th><th className="num" title={LIVE_LABEL}>VWAP</th>
+            <th className="num" title="ATR as % of close">ATR %</th><th className="num" title="Distance from the 52-week high">52w hi</th><th className="num">RSI</th>
+            <th className="num" title="Volume / 50-day average volume">Vol/50d</th><th>Candle (T)</th><th>Results</th>
+            <th className="num" title={LIVE_LABEL}>Live LTP · %<br /><span className="muted">VWAP</span></th>
           </tr></thead>
           <tbody>
             {wl.rows.map((r) => (
@@ -70,12 +70,14 @@ export default function Watchlist() {
                 <td className="num">{fmt(-r.metrics.dist_52w_high_pct, 1)}%</td>
                 <td className="num">{fmt(r.metrics.rsi, 0)}</td>
                 <td className="num">{fmt(r.metrics.volr50)}</td>
-                <td>{r.flags.candles.join(", ") || <span className="muted">–</span>}</td>
+                <td className="clip" title={r.flags.candles.join(", ")}>{r.flags.candles.join(", ") || <span className="muted">–</span>}</td>
                 <td>{r.flags.results_meeting ? <span className="pill warn">{r.flags.results_meeting}</span> : <span className="muted">–</span>}</td>
-                {(() => { const q = live?.summary.keys[r.instrument_key]; return (<>
-                  <td className="num">{fmt(q?.ltp)}</td>
-                  <td className="num" style={{ color: (q?.chg_pct ?? 0) >= 0 ? "var(--up)" : "var(--down)" }}>{q?.chg_pct == null ? "–" : fmt(q.chg_pct)}</td>
-                  <td className="num">{fmt(q?.vwap)}</td></>); })()}
+                {(() => { const q = live?.summary.keys[r.instrument_key]; return (
+                  <td className="num" title={LIVE_LABEL}>
+                    {fmt(q?.ltp)}{" "}
+                    <span style={{ color: (q?.chg_pct ?? 0) >= 0 ? "var(--up)" : "var(--down)" }}>{q?.chg_pct == null ? "" : `${q.chg_pct >= 0 ? "+" : ""}${fmt(q.chg_pct)}%`}</span>
+                    <br /><span className="muted">{q?.vwap == null ? "–" : fmt(q.vwap)}</span>
+                  </td>); })()}
               </tr>
             ))}
           </tbody>

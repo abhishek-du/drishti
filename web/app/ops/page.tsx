@@ -10,6 +10,15 @@ type Health = {
   watchlist_sizes: { session: string; listed: number }[];
 };
 const t = (s: string | null) => (s ? new Date(s).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "–");
+const RUN_STALE_H = 8;   // a run with no end after this long is stale (the recorder runs ~6.5 h)
+// green: OK, or still running and fresh; grey: NOOP; red only for an error or a stale run
+function runPill(r: { status: string | null; started_at: string }): [string, string] {
+  if (r.status === null) {
+    const stale = Date.now() - new Date(r.started_at).getTime() > RUN_STALE_H * 3600e3;
+    return stale ? ["off", "stale (no end)"] : ["on", "running"];
+  }
+  return [r.status === "OK" ? "on" : r.status === "NOOP" ? "" : "off", r.status];
+}
 
 export default function Ops() {
   const [h, setH] = useState<Health | null>(null);
@@ -24,7 +33,12 @@ export default function Ops() {
       <h3>Live WebSocket (LIVE VIEW — not used by drishti-swing-v1)</h3>
       {!h.live ? <p className="muted">The recorder has not run yet.</p> : (
         <div className="row" style={{ marginBottom: 12 }}>
-          <div className="card">state <b className={h.live.state === "connected" && Date.now() - new Date(h.live.updated_at).getTime() < 30000 ? "" : "muted"}>{h.live.state}</b>{Date.now() - new Date(h.live.updated_at).getTime() > 30000 && h.live.state !== "stopped" ? " (stale)" : ""}</div>
+          {(() => {
+            const old = Date.now() - new Date(h.live.updated_at).getTime() > 30000;
+            const bad = h.live.state === "error" || (old && h.live.state !== "stopped");
+            const cls = bad ? "off" : h.live.state === "connected" ? "on" : "";
+            return <div className="card">state <span className={`pill ${cls}`}>{h.live.state}{bad && old ? " (stale)" : ""}</span></div>;
+          })()}
           <div className="card">keys {h.live.keys} · connections {h.live.connections} · reconnects {h.live.reconnects}</div>
           <div className="card">frames {h.live.frames?.toLocaleString("en-IN")} · last data {t(h.live.last_data_at)}</div>
           <div className="card">ticks {h.live.tick_writing ? "writing" : "STOPPED"} · {h.live.tick_files} files · raw {(h.live.tick_bytes_raw / 1e6).toFixed(1)} MB{h.live.tick_gb_today != null ? ` · on disk ${h.live.tick_gb_today} GB` : ""} · disk free {h.live.disk_free_gb} GB</div>
@@ -38,7 +52,7 @@ export default function Ops() {
         <thead><tr><th>Job</th><th>Session</th><th>Started</th><th>Finished</th><th>Status</th><th>Error</th></tr></thead>
         <tbody>{h.runs.map((r) => (
           <tr key={r.kind}><td>{r.kind}</td><td>{r.session_date ?? "–"}</td><td>{t(r.started_at)}</td><td>{t(r.finished_at)}</td>
-            <td><span className={`pill ${r.status === "OK" ? "on" : r.status === "NOOP" ? "" : "off"}`}>{r.status ?? "running"}</span></td>
+            <td>{(() => { const [cls, label] = runPill(r); return <span className={`pill ${cls}`}>{label}</span>; })()}</td>
             <td className="muted">{r.error ?? ""}</td></tr>))}</tbody>
       </table></div>
       <h3>ASM / GSM files</h3>

@@ -34,6 +34,7 @@ LIVE_DIR = Path("/dev/shm/drishti_live")
 IST_S, OPEN_S = 19800, 9 * 3600 + 15 * 60                           # IST offset; 09:15 IST
 COLS = ["time", "session_date", "open", "high", "low", "close", "volume", "vwap"]
 TTL_S = 30.0
+TTL_LIVE_S = 10.0    # 1m/5m: the chart refreshes indicator values every 10 s
 _cache: dict[tuple[str, str], tuple[float, tuple[pd.DataFrame, list[dict]]]] = {}
 
 
@@ -187,9 +188,10 @@ async def _load_1d(key: str) -> tuple[pd.DataFrame, list[dict]]:
 
 
 async def load(key: str, tf: str) -> tuple[pd.DataFrame, list[dict]]:
-    """(bars with COLS + src, oldest first; sources with their last bar time). Cached TTL_S."""
+    """(bars with COLS + src, oldest first; sources with their last bar time). Cached TTL_S
+    (TTL_LIVE_S for 1m/5m)."""
     hit = _cache.get((key, tf))
-    if hit and time.monotonic() - hit[0] < TTL_S:
+    if hit and time.monotonic() - hit[0] < (TTL_LIVE_S if tf in ("1m", "5m") else TTL_S):
         return hit[1]
     out = await (_load_1d(key) if tf == "1d" else _load_intraday(key, tf))
     _cache[(key, tf)] = (time.monotonic(), out)

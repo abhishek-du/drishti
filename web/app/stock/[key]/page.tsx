@@ -1,9 +1,14 @@
 "use client";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import KChart, { BarsData, isLive, Tf, TFS } from "@/components/kchart/KChart";
+import dynamic from "next/dynamic";
+import type { BarsData, Tf } from "@/components/kchart/KChart";
 import { get } from "@/components/api";
 import { LIVE_LABEL } from "@/components/live";
+// klinecharts touches `window` when imported, so the chart loads in the browser only (no SSR)
+const KChart = dynamic(() => import("@/components/kchart/KChart"), { ssr: false, loading: () => <p className="muted">Loading chart…</p> });
+const TFS: Tf[] = ["1m", "5m", "15m", "1h", "1d"];
+const isLive = (tf: Tf) => tf === "1m" || tf === "5m";
 
 type Trends = { trends: Record<Tf, "UP" | "DOWN" | "SIDE" | null> };
 const TREND_CLASS = { UP: "on", DOWN: "off", SIDE: "" } as const;
@@ -35,7 +40,7 @@ export default function Stock() {
   }, [k]);
 
   return (
-    <>
+    <div className="stockpage">
       <div className="row" style={{ marginBottom: 6 }}>
         <h2 style={{ margin: 0 }}>{d?.symbol ?? k}</h2>
         {d && <span className="muted">{d.name}{d.sector ? ` · ${d.sector}` : ""}</span>}
@@ -73,6 +78,6 @@ export default function Stock() {
           )}
         </div>
       )}
-    </>
+    </div>
   );
 }
