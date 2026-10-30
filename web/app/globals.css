@@ -6,6 +6,10 @@
   :root { --bg: #0f1115; --fg: #e6e8eb; --muted: #98a2b3; --line: #262a31; --card: #161a20;
           --up: #3ccf91; --down: #f0706a; --accent: #7aa2ff; --warn: #f5a524; }
 }
+:root[data-theme="light"] { --bg: #ffffff; --fg: #1a1d21; --muted: #667085; --line: #e4e7ec; --card: #f8f9fb;
+  --up: #12805c; --down: #c0362c; --accent: #2b59c3; --warn: #b54708; color-scheme: light; }
+:root[data-theme="dark"] { --bg: #0f1115; --fg: #e6e8eb; --muted: #98a2b3; --line: #262a31; --card: #161a20;
+  --up: #3ccf91; --down: #f0706a; --accent: #7aa2ff; --warn: #f5a524; color-scheme: dark; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--fg);
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
@@ -42,13 +46,53 @@ pre { white-space: pre-wrap; word-break: break-word; }
 button.sel { font-weight: 700; border-color: var(--accent); color: var(--accent); }
 .trends { gap: 6px; font-size: 13px; }
 .toggles { gap: 8px 12px; margin-bottom: 6px; }
-.chartbox { position: relative; width: 100%; max-width: 100%; overflow: hidden; }
-.chartbox .livetag { position: absolute; z-index: 3; left: 6px; top: 4px; background: var(--bg); }
-.tip { position: absolute; z-index: 4; width: 230px; font-size: 12px; line-height: 1.4;
-  pointer-events: none; padding: 6px 8px; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
 .chartgrid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
 .bias ul { margin: 6px 0 0; padding-left: 18px; }
 .bias li { margin-bottom: 4px; }
 .small { font-size: 12px; }
 @media (max-width: 900px) { .chartgrid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 480px) { main { padding: 10px; } .search ul { min-width: 0; width: calc(100vw - 32px); } }
+
+/* TradingView-style chart (components/kchart) */
+.kc { position: relative; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.kc:fullscreen { border-radius: 0; display: flex; flex-direction: column; }
+.kc-top { display: flex; gap: 4px; align-items: center; padding: 4px 6px; border-bottom: 1px solid var(--line);
+  overflow-x: auto; scrollbar-width: thin; white-space: nowrap; }
+.kc-top > * { flex: none; }
+.kc-top button, .kc-tools button { border-color: transparent; background: transparent; padding: 4px 7px; }
+.kc-top button:hover, .kc-tools button:hover:not(:disabled) { background: var(--line); }
+.kc-top button.sel, .kc-tools button.sel { color: var(--accent); background: var(--card); border-color: var(--line); }
+.kc-group { display: inline-flex; gap: 1px; border-left: 1px solid var(--line); border-right: 1px solid var(--line); padding: 0 4px; }
+.kc-tv { font-size: 13px; padding: 4px 6px; }
+.kc-menu, .kc-sym { position: relative; }
+.kc-pop { position: fixed; z-index: 20; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.18); margin-top: 2px; }
+.kc-pop button { text-align: left; }
+.kc-sympop { width: min(320px, calc(100vw - 24px)); max-height: 60vh; overflow: auto; }
+.kc-sympop ul { list-style: none; margin: 4px 0 0; padding: 0; }
+.kc-sympop li { padding: 4px 6px; cursor: pointer; white-space: normal; }
+.kc-sympop li:hover { background: var(--line); }
+.kc-panel { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--card); }
+.kc-ind { flex-direction: column; flex-wrap: nowrap; align-items: stretch; max-height: 50vh; overflow: auto; }
+.kc-ind-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.kc-ind-row { gap: 6px 10px; }
+.kc-body { display: flex; height: min(72vh, 680px); min-height: 380px; }
+.kc:fullscreen .kc-body { flex: 1; height: auto; }
+.kc-tools { display: flex; flex-direction: column; gap: 2px; padding: 4px 2px; border-right: 1px solid var(--line); overflow-y: auto; flex: none; }
+.kc-tools hr { width: 100%; border: 0; border-top: 1px solid var(--line); margin: 2px 0; }
+.kc-tools button { width: 32px; height: 30px; padding: 0; font-size: 15px; }
+.kc-tools button:disabled { opacity: .35; }
+.kc-chart { position: relative; flex: 1; min-width: 0; }
+.kc-canvas { position: absolute; inset: 24px 0 0 0; }
+.kc-legend { position: absolute; z-index: 5; left: 8px; top: 3px; right: 130px; font-size: 12px; pointer-events: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kc-trend { position: absolute; z-index: 5; right: 8px; top: 2px; font-size: 11px; background: var(--bg); }
+.kc-livetag { position: absolute; z-index: 5; left: 8px; bottom: 30px; background: var(--bg); }
+.kc-err { position: absolute; left: 12px; top: 40px; }
+@media (max-width: 480px) {
+  .kc-body { height: 62vh; min-height: 340px; }
+  .kc-tools button { width: 28px; height: 26px; font-size: 13px; }
+  .kc-canvas { top: 54px; }
+  .kc-legend { right: 8px; top: 20px; white-space: normal; line-height: 1.35; }
+  .kc-trend { top: 1px; right: auto; left: 8px; }
+}
