@@ -16,7 +16,7 @@ backoff) - re-written, not imported.
 Outputs:
   ticks      /windows/drishti_data/ticks/YYYY-MM-DD/ticks_HHMM.zst   (store.TickWriter)
   1m bars    /windows/drishti_data/bars_1m/YYYY-MM-DD/bars_HHMMSS.parquet (every 5 min)
-  live view  /dev/shm/drishti_live/summary.json and c1m/<key>.json (every second)
+  live view  /dev/shm/drishti_live/summary.json and c1m/<key>.json (<= 200 ms after a tick)
   health     backend/var/run/live_health.json (every 5 s)
 
     .venv/bin/python -m drishti.live.recorder [--until HH:MM] [--keys K1,K2]
@@ -51,6 +51,8 @@ MAX_KEYS = 300
 LIVE_DIR = Path("/dev/shm/drishti_live")
 HEALTH = BACKEND / "var" / "run" / "live_health.json"
 STALE_S = 60
+SNAP_S = 0.2           # a key's live snapshot is written <= 200 ms after its tick (Track C ask
+                       # 2026-10-30); summary.json with it, and at least once a second
 BACKOFF = (2, 5, 10, 30, 60)
 LABEL = "LIVE VIEW - not used by drishti-swing-v1"
 
@@ -178,11 +180,11 @@ class Recorder:
                 await ws.send(json.dumps({"guid": uuid.uuid4().hex, "method": "sub", "data": {
                     "mode": "full", "instrumentKeys": self.keys[i:i + 500]}}).encode())
             last_data = time.monotonic()
-            next_snap = next_health = next_guard = time.monotonic()
+            next_snap = next_health = next_guard = last_snap = time.monotonic()
             next_bars = time.monotonic() + 300
             while now() < self.until:
                 try:
-                    msg = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    msg = await asyncio.wait_for(ws.recv(), timeout=SNAP_S)
                     if isinstance(msg, bytes):
                         before = self.h.get("last_data_at")
                         self.on_frame(msg)
@@ -194,9 +196,9 @@ class Recorder:
                 if t - last_data > STALE_S:
                     self.health(state="stale")
                     raise TimeoutError("stale: no subscribed data for 60 s")
-                if t >= next_snap:
+                if (self._changed and t >= next_snap) or t >= last_snap + 1:
                     self.snapshot()
-                    next_snap = t + 1
+                    next_snap, last_snap = t + SNAP_S, t
                 if t >= next_guard:
                     if not self.ticks.stopped_by_guard and self.ticks.check_guard():
                         self.alert(f"disk guard: < {store.GUARD_GB} GB free, tick writing stopped")

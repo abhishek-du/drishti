@@ -86,3 +86,28 @@ def test_window_before_and_after_switch(monkeypatch):
     config.get_settings.cache_clear()
     assert recorder.window(_dt.date(2026, 10, 30))[0].minute == 15
     config.get_settings.cache_clear()
+
+
+def test_live_ws_pushes_on_change(tmp_path, monkeypatch):
+    import json
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from drishti.api import app as A
+    d = tmp_path / "live"
+    (d / "c1m").mkdir(parents=True)
+    monkeypatch.setattr(A, "LIVE_DIR", d)
+    (d / "summary.json").write_text(json.dumps({"updated_at": "x", "keys": {"K": {"ltp": 1}}}))
+    (d / "c1m" / "K.json").write_text(json.dumps([{"time": 60, "open": 1, "high": 1, "low": 1,
+                                                   "close": 1, "volume": 0, "vwap": None}]))
+    with TestClient(A.app).websocket_connect("/api/live/ws?key=K") as ws:
+        first = ws.receive_json()
+        assert first["summary"]["keys"]["K"]["ltp"] == 1 and len(first["candles"]) == 1
+        time.sleep(0.05)
+        (d / "c1m" / "K.json").write_text(json.dumps([{"time": 60, "open": 1, "high": 2, "low": 1,
+                                                       "close": 2, "volume": 5, "vwap": None}]))
+        t0 = time.monotonic()
+        nxt = ws.receive_json()
+        assert nxt["candles"][-1]["close"] == 2
+        assert time.monotonic() - t0 < 1.0          # pushed on change, not on a 2 s heartbeat

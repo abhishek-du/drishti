@@ -186,18 +186,34 @@ async def live_candles(key: str, tf: int = Query(1, ge=1, le=5)) -> dict:
     return {"label": LIVE_LABEL, "key": key, "tf": tf, "candles": _live_candles(key, tf)}
 
 
+def _live_mtimes(key: str | None) -> tuple[int, int]:
+    def m(p: Path) -> int:
+        try:
+            return p.stat().st_mtime_ns
+        except OSError:
+            return 0
+    return (m(LIVE_DIR / "summary.json"),
+            m(LIVE_DIR / "c1m" / f"{quote(key, safe='')}.json") if key else 0)
+
+
 @app.websocket("/api/live/ws")
 async def live_ws(ws: WebSocket, key: str | None = None, tf: int = 1):
-    """Push the live summary (and the candles of `key`) once a second while the client is
-    connected. Read only; nothing is accepted from the client."""
+    """Push the live summary (and the candles of `key`) as soon as the recorder's snapshot
+    changes (checked every 200 ms), and at least every 2 s as a heartbeat. Read only; nothing
+    is accepted from the client. Same message format as before."""
     await ws.accept()
     tf = 5 if tf == 5 else 1
+    seen, last = None, 0.0
     try:
         while True:
-            msg = {"label": LIVE_LABEL, "summary": _live_summary()}
-            if key:
-                msg["candles"] = _live_candles(key, tf)
-            await ws.send_text(json.dumps(msg, separators=(",", ":")))
-            await asyncio.sleep(1.0)
+            cur = _live_mtimes(key)
+            t = asyncio.get_running_loop().time()
+            if cur != seen or t - last >= 2.0:
+                msg = {"label": LIVE_LABEL, "summary": _live_summary()}
+                if key:
+                    msg["candles"] = _live_candles(key, tf)
+                await ws.send_text(json.dumps(msg, separators=(",", ":")))
+                seen, last = cur, t
+            await asyncio.sleep(0.2)
     except (WebSocketDisconnect, RuntimeError):
         return
