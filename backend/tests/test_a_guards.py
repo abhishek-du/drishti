@@ -25,3 +25,13 @@ def test_chart_stubs_never_leave_the_api_package():
                  if "api" not in p.relative_to(PKG).parts[:1]
                  and any("chart_stubs" in i for i in _imports(p)))
     assert bad == [], f"chart_stubs imported outside drishti/api: {bad}"
+
+
+def test_nothing_outside_the_api_imports_the_api():
+    """drishti/api holds display-only code that may use later bars (chart_api.hindsight) and
+    interim stubs; features, strategies, replay, ml, judge, data, run and scout must never
+    import it."""
+    bad = sorted(str(p.relative_to(PKG)) for p in PKG.rglob("*.py")
+                 if "api" not in p.relative_to(PKG).parts[:1]
+                 and any(i == "drishti.api" or i.startswith("drishti.api.") for i in _imports(p)))
+    assert bad == [], f"drishti.api imported outside drishti/api: {bad}"
