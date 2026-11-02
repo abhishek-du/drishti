@@ -1,6 +1,6 @@
 # Drishti handover (read this first)
 
-**Last updated:** 2026-11-02 evening, by Claude Code (Track A, the main session). Updated every evening.
+**Last updated:** 2026-11-02 20:30 IST, by Claude Code (Track A, the main session). Updated every evening.
 
 **Live status** (runs, freshness, git, cron) is written automatically every night at 21:45 to `/windows/drishti_data/handover/STATUS.md` (`p1 status`). Read that too: it is newer than this file.
 
@@ -41,7 +41,7 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **Data facts:**
   - The provisional (15:40) and official bars differ only in **close** (LTP vs NSE close); high and low were never revised in 3 sessions.
   - Drishti's 1d equals Prajna's 1d exactly (10-28: 3,416/3,416; 10-29: 3,429/3,429).
-  - Corporate-action factors equal Prajna's (212/212 on the split/bonus ISINs).
+  - **Corporate actions, full universe** (11-02: 3,594 ISINs, 0 errors, 2,324 events): factors equal Prajna's on all **2,297** common events. 88 Prajna events are no longer served by the vendor; 80 of them were announced 2025-05 … 2025-10, beyond the ~1-year window, and they include **16 splits and 15 bonuses**. **They exist only in Prajna and the irreplaceable archive, so the D1 copy must bring them in.**
   - F&O stocks have no price band; they are marked `fo` in the master (SC5/SC6 correction).
 
 ## 4. Pending work, in order
