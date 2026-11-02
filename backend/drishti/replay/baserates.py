@@ -222,6 +222,9 @@ async def run(rd: Path, tf: str, jobs: int) -> dict:
     if tf in ("15m", "both"):
         cal = [d for d in calendar(inp["bars"]) if d <= M15_END]
         prev = {d: cal[i - 1] for i, d in enumerate(cal) if i}
+        b15 = pd.read_parquet(load.research_dir() / "cache" /
+                              f"bars15m_{M15_START}_{M15_END}.parquet")
+        b15 = b15[b15.ts.dt.date <= M15_END]
         idx = {(k, d): (bool(gt), float(lq)) for k, d, gt, lq in
                zip(el.instrument_key, el.session_date, el.spec_gate, el.liq)}
         per: dict = {}
