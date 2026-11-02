@@ -91,3 +91,20 @@ def test_confirmation_candle_needs_green_close_above_hammer_high_and_volume():
 def test_intraday_costs_have_no_dp_and_stt_on_the_sell_only():
     b, s = rajat.intraday_leg(100000, "buy"), rajat.intraday_leg(100000, "sell")
     assert round(s - b, 2) == round(25.0 - 3.0, 2)                      # STT 25 vs stamp 3
+
+
+def test_x0_exits_the_full_position_at_t1_and_min_rr_is_a_parameter():
+    p = _exit([(101, 105, 100, 104), (104, 112, 103, 111.8)], "X0")
+    assert p["fills"] == [(110.0, 1.0, 1, "T1")]                      # no breakout extension
+    p = _exit([(101, 105, 100, 104), (111, 112, 110.5, 111.5)], "X0")
+    assert p["fills"] == [(111.0, 1.0, 1, "T1")]                      # gap above T1: the open
+    A = _A([(100, 101, 99, 100)] * 40)
+    z = [{"price": 109, "bottom": 108.5, "top": 109.5, "touches": 2}]
+    rajat.zones = lambda A_, d: z                                     # noqa: E731
+    try:                                                              # T1 - E = 8.5, R = 6
+        assert rajat.levels_for(A, 30, 100.0, 94.0, "daily")["status"] == "SKIP_RR"
+        assert rajat.levels_for(A, 30, 100.0, 94.0, "daily", 1.0)["status"] == "OK"
+        assert rajat.levels_for(A, 30, 100.0, 94.0, "daily", 1.5)["status"] == "SKIP_RR"
+    finally:
+        import importlib
+        importlib.reload(rajat)

@@ -35,7 +35,10 @@ BPS = (5, 10, 20)
 RISK_INR = 10_000.0
 VARIANTS = {"RJ1": ("daily", True, "E1", "X1"), "RJ2": ("daily", True, "E1", "X2"),
             "RJ3": ("daily", False, "E1", "X1"), "RJ4": ("daily", True, "E2", "X1"),
-            "RJ5": ("15m", True, "E1", "X1"), "RJ6": ("15m", True, "E1", "X2")}
+            "RJ5": ("15m", True, "E1", "X1"), "RJ6": ("15m", True, "E1", "X2"),
+            # 15m min-RR test (user 2026-11-02): only the minimum RR (and RJ9's exit) changes
+            "RJ7": ("15m", True, "E1", "X1", 1.0), "RJ8": ("15m", True, "E1", "X1", 1.5),
+            "RJ9": ("15m", True, "E1", "X0", 1.0)}
 WINDOWS = {"daily": {"dev": (_dt.date(2019, 9, 1), _dt.date(2023, 12, 31)),
                      "holdout": (_dt.date(2024, 1, 1), None)},
            "15m": {"dev": (_dt.date(2022, 1, 1), _dt.date(2024, 12, 31)),
@@ -106,7 +109,7 @@ def is_signal(A: dict, t: int, location: bool) -> bool:
                 and v >= 1.5 * A["vavg"][k])
 
 
-def levels_for(A: dict, d: int, e: float, s: float, tf: str) -> dict:
+def levels_for(A: dict, d: int, e: float, s: float, tf: str, min_rr: float = 2.0) -> dict:
     """R1/R2 from the zones known on the decision bar d, and the skip rules."""
     if e <= s:
         return {"status": "STOP_ABOVE_ENTRY"}
@@ -117,7 +120,7 @@ def levels_for(A: dict, d: int, e: float, s: float, tf: str) -> dict:
     r2 = levels.resistance_above(zs, r1["top"])
     t1, R = r1["bottom"], e - s
     out = {"T1": t1, "R1_top": r1["top"], "T2": r2["bottom"] if r2 else None, "R": R}
-    if t1 - e < 2 * R:
+    if t1 - e < min_rr * R:
         return out | {"status": "SKIP_RR"}
     q = max(1, math.floor(RISK_INR / R))
     if trade_cost(tf, e, q, [(t1, q, 0)], 10) / q / R > 0.15:
@@ -150,6 +153,10 @@ def path(A: dict, first: int, last: int, e: float, s: float, lv: dict, mode: str
         if phase == "pre":
             if h[i] >= T1:
                 hit1 = True
+                if mode == "X0":                 # full exit at T1, no extension
+                    fills.append((max(T1, float(o[i])) if gap_ok else T1, frac, i, "T1"))
+                    frac = 0.0
+                    break
                 if mode == "X2":
                     fills.append((max(T1, float(o[i])) if gap_ok else T1, 0.5, i, "T1_HALF"))
                     frac = 0.5
@@ -232,7 +239,8 @@ def stock_job(args) -> tuple[list, list, dict]:
         last_of_day = np.array([end_of_day[dd] for dd in day])
     trades, plac, skips = [], [], {}
     rng = np.random.default_rng([SEED, zlib.crc32(key.encode())])
-    for vid, (vtf, loc, entry, mode) in VARIANTS.items():
+    for vid, (vtf, loc, entry, mode, *rr) in VARIANTS.items():
+        min_rr = rr[0] if rr else 2.0
         if vtf != tf:
             continue
         sk = skips.setdefault(vid, {"signals": 0})
@@ -256,7 +264,7 @@ def stock_job(args) -> tuple[list, list, dict]:
                     continue
                 e, e_i, first, fill_bar = float(A["o"][d + 1]), d + 1, d + 1, True
             s = float(A["lo"][t] - 0.1 * A["atr"][t])
-            lv = levels_for(A, d, e, s, tf)
+            lv = levels_for(A, d, e, s, tf, min_rr)
             if lv["status"] != "OK":
                 sk[lv["status"]] = sk.get(lv["status"], 0) + 1
                 continue
@@ -292,7 +300,7 @@ def stock_job(args) -> tuple[list, list, dict]:
                 else:
                     ep, pe_i, pf, pfb = float(A["o"][P + 1]), P + 1, P + 1, True
                 sp = ep - k_atr * A["atr"][P]
-                plv = levels_for(A, P, ep, sp, tf)
+                plv = levels_for(A, P, ep, sp, tf, min_rr)
                 if plv["status"] != "OK":
                     continue
                 pl = (pe_i + HOLD_DAILY) if tf == "daily" else last_of_day[pe_i]
@@ -447,7 +455,8 @@ async def run(tf: str, rd: Path, window: str, only: set | None, jobs: int) -> di
         pl = P[P.variant == vid] if len(P) else P
         m, pm = metrics(t), metrics(pl)
         out["variants"][vid] = {"rules": m, "placebo": pm, "skips": sk, "verdict": verdict(m, pm)}
-    d = load.research_dir() / "sprint" / "rajat" / f"{tf}_{window}"
+    d = load.research_dir() / "sprint" / "rajat" / (
+        f"{tf}_{window}" + (f"_{'_'.join(sorted(only))}" if only else ""))
     d.mkdir(parents=True, exist_ok=window == "dev")
     (d / "result.json").write_text(json.dumps(out, indent=1, default=str))
     T.to_parquet(d / "trades.parquet", index=False)
