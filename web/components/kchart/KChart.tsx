@@ -114,14 +114,19 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
     const leave = () => setHover(null);
     box.current.addEventListener("mouseleave", leave);
     // a click on a bar opens its details card (not while a drawing tool is active)
-    const click = () => { if (!pendingRef.current) setPinned(hoverRef.current ? hoverRef.current.i : null); };
+    // decided at mousedown: the click that completes a drawing (the tool is cleared on that click)
+    // must not open the card
+    let drawingAtDown = false;
+    const down = () => { drawingAtDown = !!pendingRef.current; };
+    const click = () => { if (!drawingAtDown && !pendingRef.current) setPinned(hoverRef.current ? hoverRef.current.i : null); };
+    box.current.addEventListener("mousedown", down, true);
     box.current.addEventListener("click", click);
     const ro = new ResizeObserver(() => c.resize());
     ro.observe(box.current);
     const fs = () => setTimeout(() => c.resize(), 50);
     document.addEventListener("fullscreenchange", fs);
     const el = box.current;
-    return () => { ro.disconnect(); el.removeEventListener("mouseleave", leave); el.removeEventListener("click", click); document.removeEventListener("fullscreenchange", fs); dispose(c); chart.current = null; };
+    return () => { ro.disconnect(); el.removeEventListener("mouseleave", leave); el.removeEventListener("click", click); el.removeEventListener("mousedown", down, true); document.removeEventListener("fullscreenchange", fs); dispose(c); chart.current = null; };
   }, []);
 
   useEffect(() => {

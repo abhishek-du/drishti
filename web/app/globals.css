@@ -940,12 +940,13 @@ pre.terminal {
     font-size: 13px;
   }
   .kc-canvas {
-    top: 48px;
+    top: 74px;   /* room for the trend badge and the legend's up to three lines above the indicator rows */
   }
   .kc-legend {
     right: 8px;
-    top: 20px;
+    top: 28px;
     white-space: normal;
-    line-height: 1.35;
+    font-size: 11px;
+    line-height: 1.3;
   }
 }
