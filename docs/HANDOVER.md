@@ -47,7 +47,7 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 ## 4. Pending work, in order
 
 1. **P1c remaining** (target: complete 11-12, then shadow sessions 11-12 … 11-19):
-   1. Upstox `/v2/news` ingest (D2: no NSE fetching anywhere).
+   1. ~~Upstox `/v2/news` ingest~~ DONE 2026-11-02 (migration 0007, `p1 news`). The first live run had 120 requests, 0 errors, 173 articles. Versus Prajna over 6 days: 133 common, 60 only in Prajna, because the vendor drops older articles of busy stocks before 7 days and Prajna polls every 30 min. Fix: the 30-min cron (`ops/cron.txt`); the pre-switch gap is filled by the D1 copy.
    2. Nightly intraday for the top 500 (1m/15m/1h → Parquet), plus the 1m gap 2026-04-29 → 07-17 after the switch (D3; ~0.5 GB).
    3. The D1 copy tool (Prajna history → Drishti: 1d into Postgres, intraday into Parquet; per-month counts and hashes) and the first copy.
    4. Re-point Drishti's reads (`bars.py`, `bar_check`, `eod_quotes.universe_keys`, `run/p2.py`, the API) from Prajna's live DB to Drishti's tables, behind a flag.
@@ -73,7 +73,7 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **The v2 research direction.** v1 is on hold; any new candidate needs a new untouched window, i.e. forward data.
 - **The second archive location** (external disk ≥ 128 GB or an rclone crypt remote). Needed before 11-20.
 - **Tick retention** (30 days now). The measured cost is ~0.03 GB/day for ~50 keys and ~0.15 GB/day for 300 keys, so 60+ days is affordable.
-- **Cron lines not yet installed** (`ops/cron.txt`): `ca` 23:00 and `status` 21:45. The current crontab has 11 Drishti lines; with both it becomes 13.
+- **Cron lines not yet installed** (`ops/cron.txt`): `news` every 30 min. The crontab has 13 Drishti lines now; with `news` it becomes 14.
 
 ## 6. Hard rules (summary; the full text is in `CLAUDE.md`)
 
