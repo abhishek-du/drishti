@@ -1,12 +1,12 @@
 # Drishti read-only API on 127.0.0.1:8700 (PAPER ONLY). Install: see ops/systemd/README.md
 [Unit]
-Description=Drishti API (read only, 127.0.0.1:8700)
+Description=Drishti API (read only, port 8700)
 After=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=/home/cis/windows/drishti/backend
-ExecStart=/home/cis/windows/drishti/backend/.venv/bin/uvicorn drishti.api.app:app --host 127.0.0.1 --port 8700
+ExecStart=/home/cis/windows/drishti/backend/.venv/bin/uvicorn drishti.api.app:app --host 0.0.0.0 --port 8700
 Restart=on-failure
 RestartSec=10
 StandardOutput=append:/home/cis/windows/drishti/backend/var/logs/api.log

@@ -21,3 +21,7 @@
 # fraction 0.3, ~3 h) + factor derivation + continuity check vs Prajna. The vendor serves only
 # ~1 year of history, so a missed night is caught up the next night.
 0 23 * * *     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh ca
+# Upstox news (P1c, D2): every 30 min 08:00-22:30, every day (~120 requests, ~1.5 min, fraction 0.2).
+# The vendor keeps only the newest articles per stock (busy names drop out before 7 days), so
+# frequent polling is what keeps coverage complete.
+*/30 8-22 * * *  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh news

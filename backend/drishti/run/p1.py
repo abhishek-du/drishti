@@ -9,6 +9,7 @@
     .venv/bin/python -m drishti.run.p1 daily1d [--to D] [--limit N]   # official 1d (P1c)
     .venv/bin/python -m drishti.run.p1 compare1d [--date D]           # vs Prajna (shadow)
     .venv/bin/python -m drishti.run.p1 ca [--limit N] [--isins A,B]   # corporate actions (P1c)
+    .venv/bin/python -m drishti.run.p1 news [--limit N]               # Upstox /v2/news (P1c, D2)
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from drishti.core.clock import IST, now, today
 from drishti.core.config import BACKEND, get_settings
 from drishti.core.db import prajna_sessionmaker, sessionmaker
 from drishti.data import (bar_check, corporate_actions, daily1d, eod_quotes, holidays, indices,
-                          manual, master)
+                          manual, master, news)
 
 
 async def trading_day(s, d: _dt.date) -> bool:
@@ -167,6 +168,15 @@ async def main(cmd: str, args: list[str]) -> dict:
                 out["derive"] = await corporate_actions.derive(s, rid)
                 async with prajna_sessionmaker()() as ps:
                     out["vs_prajna"] = await corporate_actions.compare_with_prajna(s, ps)
+            elif cmd == "news":
+                keys = await daily1d.universe(s)
+                if "--limit" in args:
+                    keys = keys[:int(args[args.index("--limit") + 1])]
+                out = {"fetch": await news.fetch_store(s, rid, Upstox(fraction=min(
+                    0.2, get_settings().DRISHTI_UPSTOX_RATE_FRACTION)), keys)}
+                async with prajna_sessionmaker()() as ps:
+                    out["vs_prajna"] = await news.compare_with_prajna(
+                        s, ps, now() - _dt.timedelta(days=6))
             elif cmd == "compare1d":
                 from sqlalchemy import text
                 day = _dt.date.fromisoformat(args[args.index("--date") + 1]) if "--date" in args \

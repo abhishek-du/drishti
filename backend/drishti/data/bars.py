@@ -55,12 +55,17 @@ async def official(ps, day: _dt.date, days: int = 450, as_of: _dt.datetime | Non
         factor_price, knowable_at, vendor_applied from canon_ca_factor
         where status = 'EXACT' and ex_date is not null"""))).all(),
         columns=["ca_id", "instrument_key", "ex_date", "f", "kn", "va"])
+    # only stocks with an EXACT factor can need it: the query stays a small index lookup
+    # (unfiltered it was a parallel hash join over ohlcv_bar on every chart request, which
+    # filled the container's 64 MB /dev/shm - "could not resize shared memory", 2026-11-02)
+    ca_keys = sorted(set(ev.instrument_key) & set(df.instrument_key.unique()))
     raw_for = {(p, int(c)) for p, c in (await ps.execute(text("""
         select distinct b.payload_sha256, jsonb_array_elements_text(o.explained_by -> 'ca_ids')
         from ohlcv_observation o
         join ohlcv_bar b on b.instrument_id = o.instrument_id and b.timeframe = o.timeframe
          and b.bar_start_utc = o.bar_start_utc and o.fetched_at > b.fetched_at
-        where o.timeframe = '1d' and o.classification = 'CA_ADJUSTMENT'"""))).all()}
+        where o.timeframe = '1d' and o.classification = 'CA_ADJUSTMENT'
+          and o.instrument_key = any(:k)"""), {"k": ca_keys})).all()} if ca_keys else set()
     df = df.merge(basis, on="payload", how="left")
     for c in COLS:
         df[c] = df[c].astype(float)
