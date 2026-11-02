@@ -8,6 +8,7 @@
     .venv/bin/python -m drishti.run.p1 master        # Upstox public NSE master (06:20)
     .venv/bin/python -m drishti.run.p1 daily1d [--to D] [--limit N]   # official 1d (P1c)
     .venv/bin/python -m drishti.run.p1 compare1d [--date D]           # vs Prajna (shadow)
+    .venv/bin/python -m drishti.run.p1 ca [--limit N] [--isins A,B]   # corporate actions (P1c)
 """
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ from drishti.core import runlog
 from drishti.core.clock import IST, now, today
 from drishti.core.config import BACKEND, get_settings
 from drishti.core.db import prajna_sessionmaker, sessionmaker
-from drishti.data import bar_check, daily1d, eod_quotes, holidays, indices, manual, master
+from drishti.data import (bar_check, corporate_actions, daily1d, eod_quotes, holidays, indices,
+                          manual, master)
 
 
 async def trading_day(s, d: _dt.date) -> bool:
@@ -151,6 +153,20 @@ async def main(cmd: str, args: list[str]) -> dict:
                     keys = keys[:int(args[args.index("--limit") + 1])]
                 out = await daily1d.fetch_store(s, rid, Upstox(fraction=min(
                     0.5, get_settings().DRISHTI_UPSTOX_RATE_FRACTION)), keys, to)
+            elif cmd == "ca":
+                keys = await daily1d.universe(s)
+                key_of = {k.split("|", 1)[1]: k for k in keys}
+                isins = args[args.index("--isins") + 1].split(",") if "--isins" in args \
+                    else sorted(key_of)
+                if "--limit" in args:
+                    isins = isins[:int(args[args.index("--limit") + 1])]
+                frac = float(args[args.index("--fraction") + 1]) if "--fraction" in args \
+                    else min(0.3, get_settings().DRISHTI_UPSTOX_RATE_FRACTION)
+                out = {"fetch": await corporate_actions.fetch_store(
+                    s, rid, Upstox(fraction=frac), isins, key_of)}
+                out["derive"] = await corporate_actions.derive(s, rid)
+                async with prajna_sessionmaker()() as ps:
+                    out["vs_prajna"] = await corporate_actions.compare_with_prajna(s, ps)
             elif cmd == "compare1d":
                 from sqlalchemy import text
                 day = _dt.date.fromisoformat(args[args.index("--date") + 1]) if "--date" in args \

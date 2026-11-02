@@ -17,3 +17,7 @@
 # Live recorder (LIVE VIEW + ticks; not used by drishti-swing-v1): every 5 min in market hours,
 # skipped silently while running or outside 09:21-15:35 (09:15 after the switch)
 */5 9-15 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh live
+# Corporate actions (P1c): every night, all ~3,580 equity ISINs (fundamentals API, own budget,
+# fraction 0.3, ~3 h) + factor derivation + continuity check vs Prajna. The vendor serves only
+# ~1 year of history, so a missed night is caught up the next night.
+0 23 * * *     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh ca
