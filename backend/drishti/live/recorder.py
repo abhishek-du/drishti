@@ -90,7 +90,8 @@ class Recorder:
         self.h = {"label": LABEL, "state": "starting", "keys": len(keys), "connections": 0,
                   "reconnects": 0, "frames": 0, "last_frame_at": None, "last_data_at": None,
                   "started_at": now().isoformat(), "until": until.isoformat(), "alerts": [],
-                  "tick_bytes_raw": 0, "tick_files": 0, "bars_rows": 0, "endpoint": None}
+                  "tick_bytes_raw": 0, "tick_files": 0, "bars_rows": 0, "endpoint": None,
+                  "reconnect_log": [], "max_loop_gap_s": 0.0}
         self._changed: set[str] = set()
         self._bar_rows = 0
 
@@ -182,7 +183,12 @@ class Recorder:
             last_data = time.monotonic()
             next_snap = next_health = next_guard = last_snap = time.monotonic()
             next_bars = time.monotonic() + 300
+            prev_t = time.monotonic()
             while now() < self.until:
+                gap = time.monotonic() - prev_t      # > ~1 s means our loop blocked (diagnosis
+                prev_t = time.monotonic()             # of the keepalive ping timeouts)
+                if gap > self.h["max_loop_gap_s"]:
+                    self.h["max_loop_gap_s"] = round(gap, 3)
                 try:
                     msg = await asyncio.wait_for(ws.recv(), timeout=SNAP_S)
                     if isinstance(msg, bytes):
@@ -224,6 +230,11 @@ class Recorder:
             except Exception as e:                           # closed, stale, network
                 failures += 1
                 self.h["reconnects"] += 1
+                self.h["reconnect_log"] = (self.h["reconnect_log"] + [{
+                    "at": now().isoformat(timespec="seconds"),
+                    "error": f"{type(e).__name__}: {e}"[:160],
+                    "last_data_at": self.h.get("last_data_at"),
+                    "max_loop_gap_s": self.h["max_loop_gap_s"]}])[-20:]
                 self.health(state="reconnecting", last_error=f"{type(e).__name__}: {e}"[:200])
                 if failures > 20:
                     self.alert("gave up after 20 consecutive failed connections")

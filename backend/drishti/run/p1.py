@@ -62,30 +62,41 @@ async def eod(s, rid, day: _dt.date, keys: list[str], rows: list[dict],
 
 
 async def barcheck(s, args: list[str]) -> dict:
-    """Provisional vs official bar of T (default: the latest EOD session before today). The
-    full report goes to var/reports/bar_check_<T>.json; the run row keeps the counts."""
+    """Provisional vs official bar of T. Default: every EOD session before today that has no
+    report yet, oldest first (Friday's session waits for Prajna's Monday-morning 1d fetch).
+    A session whose official bars are not in Prajna yet is left for the next run (REFUSED ->
+    NOOP), not failed. Reports go to var/reports/bar_check_<T>.json."""
     from sqlalchemy import text
+    rep_dir = BACKEND / "var" / "reports"
     if "--date" in args:
-        day = _dt.date.fromisoformat(args[args.index("--date") + 1])
+        days = [_dt.date.fromisoformat(args[args.index("--date") + 1])]
     else:
-        day = (await s.execute(text("""select max(r.session_date) from run r
+        days = [d for d in (await s.execute(text("""select distinct r.session_date from run r
             join run_end e using (run_id) where r.kind = 'P1_EOD' and e.status = 'OK'
-            and r.session_date < :t"""), {"t": today()})).scalar()
-    if day is None:
-        return {"skipped": "no provisional session"}
-    prov = await bar_check.provisional(s, day)
-    if prov.empty:
-        return {"session": str(day), "skipped": "no provisional bars"}
-    async with prajna_sessionmaker()() as ps:
-        hist = await bar_check.official_history(ps, day, list(prov.index))
-    off = hist[hist.session_date == day].set_index("instrument_key")
-    if off.empty:
-        raise RuntimeError(f"official 1d bars of {day} not in Prajna yet")
-    rep = bar_check.compare(prov, off, hist, day, bar_check.eligible_proxy(hist, off, day))
-    path = BACKEND / "var" / "reports" / f"bar_check_{day}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(rep, indent=1, default=str))
-    return {k: v for k, v in rep.items() if k != "detail"} | {"report": str(path)}
+            and r.session_date < :t order by 1"""), {"t": today()})).scalars()
+            if not (rep_dir / f"bar_check_{d}.json").exists()]
+    if not days:
+        return {"skipped": "every provisional session already checked"}
+    done, waiting = {}, []
+    for day in days:
+        prov = await bar_check.provisional(s, day)
+        if prov.empty:
+            continue
+        async with prajna_sessionmaker()() as ps:
+            hist = await bar_check.official_history(ps, day, list(prov.index))
+        off = hist[hist.session_date == day].set_index("instrument_key")
+        if off.empty:
+            waiting.append(str(day))
+            continue
+        rep = bar_check.compare(prov, off, hist, day, bar_check.eligible_proxy(hist, off, day))
+        rep_dir.mkdir(parents=True, exist_ok=True)
+        (rep_dir / f"bar_check_{day}.json").write_text(json.dumps(rep, indent=1, default=str))
+        done[str(day)] = {k: rep[k] for k in ("compared", "revised", "eligible_revised",
+                                              "eligible_revised_crossed_boundary",
+                                              "revised_level_move_ge_0.1atr")}
+    if not done and waiting:
+        raise SystemExit(f"REFUSED: official 1d bars not in Prajna yet for {', '.join(waiting)}")
+    return {"checked": done, "waiting": waiting}
 
 
 async def main(cmd: str, args: list[str]) -> dict:
