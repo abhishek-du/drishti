@@ -84,7 +84,7 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **`drishti-swing-v1` is frozen**; no change to it or the forward plan without the user.
 - **Testing:** no replay or training inside a forward window, no interim looks, the blind rule.
 - **Any DB-instance change:** backup + sha256 first, into `/windows/prajna_archive`.
-- **Ownership** (`TRACKS.md`): only Track A merges to `main` and owns migrations, cron, `.env`/token and Upstox calls. *(Note 2026-11-02: two commits on `main` came from outside Track A: the Track C merge `250eb87` on 10-30 17:45 and `GEMINI.md` on 11-02. Both were checked and are fine.)*
+- **Ownership** (`TRACKS.md`): only Track A merges to `main` and owns migrations, cron, `.env`/token and Upstox calls. *(Note 2026-11-02: the Track C merge `250eb87` on 10-30 17:45 came from outside Track A; it was checked and is fine. `GEMINI.md` + `.geminiignore` (`d644304`) are the user's backup instructions for Gemini CLI: keep both on `main`.)*
 - **Processes:** kill by exact PID only; never edit a running runbook; never edit code while pytest runs.
 
 ## 7. Where things are

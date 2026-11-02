@@ -57,3 +57,7 @@ There are three Claude Code sessions, one per git worktree, working on the same 
    - restarts the systemd units when the API or web changed.
    - A failing merge is reverted on `main` and handed back.
 4. **No force-push and no history rewrite** on `main` or a track branch.
+
+## Backup tool
+
+`GEMINI.md` + `.geminiignore` (user, 2026-11-02) let Gemini CLI take over if Claude Code is unavailable. Gemini CLI follows `CLAUDE.md` and `docs/HANDOVER.md`. Both files stay on `main`.
