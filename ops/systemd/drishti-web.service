@@ -1,7 +1,7 @@
 # Drishti web on 127.0.0.1:3100 (Next.js production build; proxies /api to 8700).
 # Run `npx next build` in web/ after every web change, then restart this unit.
 [Unit]
-Description=Drishti web (127.0.0.1:3100)
+Description=Drishti web (port 3100)
 After=drishti-api.service
 Wants=drishti-api.service
 
@@ -10,7 +10,7 @@ Type=simple
 WorkingDirectory=/home/cis/windows/drishti/web
 Environment=NODE_ENV=production
 Environment=NEXT_TELEMETRY_DISABLED=1
-ExecStart=/home/cis/.local/bin/node /home/cis/windows/drishti/web/node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3100
+ExecStart=/home/cis/.local/bin/node /home/cis/windows/drishti/web/node_modules/next/dist/bin/next start -H 0.0.0.0 -p 3100
 Restart=on-failure
 RestartSec=10
 StandardOutput=append:/home/cis/windows/drishti/backend/var/logs/web.log
