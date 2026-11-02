@@ -1,3 +1,5 @@
+import { get } from "./api";
+
 // The live feed comes straight from the API's WebSocket (Next's rewrites do not proxy
 // WebSockets). Local only: the API is NEXT_PUBLIC_DRISHTI_API, else this host on port 8700.
 export const LIVE_LABEL = "LIVE VIEW — not used by drishti-swing-v1";
@@ -37,13 +39,55 @@ export function openLive(onMsg: (m: LiveMsg) => void, key?: string, tf = 1): () 
   let ws: WebSocket | null = null;
   let stop = false;
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+  let wsConnected = false;
+
+  const poll = async () => {
+    if (stop || wsConnected) return;
+    try {
+      const summaryPromise = get<Record<string, unknown>>("/api/live/summary");
+      const candlesPromise = key
+        ? get<{ candles: LiveCandle[] }>(`/api/live/candles?key=${encodeURIComponent(key)}&tf=${tf}`)
+        : Promise.resolve(null);
+      const [sum, can] = await Promise.all([summaryPromise, candlesPromise]);
+      if (!stop && !wsConnected && sum) {
+        onMsg({
+          label: LIVE_LABEL,
+          summary: sum as LiveMsg["summary"],
+          candles: can?.candles,
+        });
+      }
+    } catch {
+      /* ignore polling error */
+    }
+  };
+
+  const startPolling = () => {
+    if (pollTimer) return;
+    poll();
+    pollTimer = setInterval(poll, 1500);
+  };
+
+  const stopPolling = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = undefined;
+    }
+  };
 
   const connect = () => {
     try {
       const base = wsBase();
-      if (!base) return;
+      if (!base) {
+        startPolling();
+        return;
+      }
       const url = `${base}/api/live/ws?tf=${tf}${key ? `&key=${encodeURIComponent(key)}` : ""}`;
       ws = new WebSocket(url);
+      ws.onopen = () => {
+        wsConnected = true;
+        stopPolling();
+      };
       ws.onmessage = (e) => {
         try {
           onMsg(JSON.parse(e.data));
@@ -52,9 +96,13 @@ export function openLive(onMsg: (m: LiveMsg) => void, key?: string, tf = 1): () 
         }
       };
       ws.onclose = () => {
-        if (!stop) retry = setTimeout(connect, 3000);
+        wsConnected = false;
+        startPolling();
+        if (!stop) retry = setTimeout(connect, 5000);
       };
       ws.onerror = () => {
+        wsConnected = false;
+        startPolling();
         try {
           ws?.close();
         } catch {
@@ -62,14 +110,18 @@ export function openLive(onMsg: (m: LiveMsg) => void, key?: string, tf = 1): () 
         }
       };
     } catch {
-      // Gracefully schedule retry if browser blocks connection
+      wsConnected = false;
+      startPolling();
       if (!stop) retry = setTimeout(connect, 5000);
     }
   };
 
   connect();
+  startPolling();
+
   return () => {
     stop = true;
+    stopPolling();
     clearTimeout(retry);
     try {
       ws?.close();
