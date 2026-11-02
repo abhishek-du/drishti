@@ -203,3 +203,20 @@ def supertrend(df: pd.DataFrame, by: str | None = None, n: int = 10, mult: float
                 d = -1
         dr[i], st[i] = d, fu[i] if d == 1 else fd[i]
     return pd.DataFrame({"st": st, "st_dir": dr}, index=df.index)
+
+
+def adx(df: pd.DataFrame, by: str | None = None, n: int = 14) -> pd.Series:
+    """Wilder ADX(n) (not in the frozen spec; a regime feature): +DM/-DM and true range smoothed
+    with `wilder`, DX = 100 |+DI - -DI| / (+DI + -DI), ADX = Wilder mean of DX."""
+    g = _grp(df, by)
+    up, dn = df.high - shift(df.high, g), shift(df.low, g) - df.low
+    pdm = up.where((up > dn) & (up > 0), 0.0).where(up.notna())
+    mdm = dn.where((dn > up) & (dn > 0), 0.0).where(dn.notna())
+    pc = shift(df.close, g)
+    tr = pd.concat([df.high - df.low, (df.high - pc).abs(), (df.low - pc).abs()], axis=1).max(
+        axis=1).where(pc.notna())
+    atr_, p, m = wilder(tr, g, n), wilder(pdm, g, n), wilder(mdm, g, n)
+    pdi, mdi = 100 * p / atr_, 100 * m / atr_
+    tot = pdi + mdi
+    dx = (100 * (pdi - mdi).abs() / tot.replace(0, np.nan)).mask(tot == 0, 0.0)
+    return wilder(dx, g, n)
