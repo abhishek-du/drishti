@@ -68,6 +68,11 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 4. **Live recorder:** diagnose the repeated `keepalive ping timeout` reconnects. Since 11-03 the health file has a `reconnect_log` and `max_loop_gap_s`.
 5. **Bar source decision** after 5 barcheck sessions (11-03): keep the 19:30 provisional run with the SC3 08:45 recheck, or move it.
 
+**Postgres shm (11-02):**
+- 12 "could not resize shared memory" errors came from Drishti's unfiltered CA payload query in `bars.official`. It is fixed in code (`4e481fb`); the parallel load test afterwards had 0 errors.
+- The container's `/dev/shm` is 64 MB; it is raised to 1 GB on the switch night (`SWITCH_TO_B` 6.2).
+- The `ALTER ROLE ... max_parallel_workers_per_gather = 0` fallback was NOT applied: it is not needed so far.
+
 ## 5. Open questions for the user
 
 - **The v2 research direction.** v1 is on hold; any new candidate needs a new untouched window, i.e. forward data.
