@@ -10,19 +10,16 @@ export type LiveCandle = { time: number; open: number; high: number; low: number
 const API = process.env.NEXT_PUBLIC_DRISHTI_API;
 export const wsBase = () => {
   if (typeof window === "undefined") return "";
-  const isHttps = window.location.protocol === "https:";
-  const proto = isHttps ? "wss" : "ws";
   const host = window.location.hostname;
 
-  // 1. Explicit pairing for public ELB / reverse proxy
-  if (host.includes("3100")) {
-    const backendHost = host.replace("3100", "8700");
-    return `${proto}://${backendHost}`;
+  // 1. Public ELB / CDN domains (cisinlive.com): ELB proxy currently returns 404 on WS upgrade
+  // so fallback directly to HTTP polling to avoid repeated 404 console spam.
+  if (host.includes("cisinlive.com") || host.includes("elb")) {
+    return "";
   }
-  if (host.includes("3110")) {
-    const backendHost = host.replace("3110", "8710");
-    return `${proto}://${backendHost}`;
-  }
+
+  const isHttps = window.location.protocol === "https:";
+  const proto = isHttps ? "wss" : "ws";
 
   // 2. Localhost or 127.0.0.1
   if (host === "127.0.0.1" || host === "localhost") {
