@@ -6,7 +6,17 @@ export type LiveMsg = { label: string; summary: { updated_at: string | null; key
 export type LiveCandle = { time: number; open: number; high: number; low: number; close: number; volume: number; vwap: number | null };
 
 const API = process.env.NEXT_PUBLIC_DRISHTI_API;
-export const wsBase = () => (API ? API.replace(/^http/, "ws").replace(/\/$/, "") : `ws://${location.hostname}:8700`);
+export const wsBase = () => {
+  if (typeof window !== "undefined" && window.location.hostname && window.location.hostname !== "127.0.0.1" && window.location.hostname !== "localhost") {
+    try {
+      const p = API ? new URL(API).port : "8700";
+      return `ws://${window.location.hostname}:${p || "8700"}`;
+    } catch {
+      return `ws://${window.location.hostname}:8700`;
+    }
+  }
+  return API ? API.replace(/^http/, "ws").replace(/\/$/, "") : `ws://${location.hostname}:8700`;
+};
 
 export function openLive(onMsg: (m: LiveMsg) => void, key?: string, tf = 1): () => void {
   let ws: WebSocket | null = null;
