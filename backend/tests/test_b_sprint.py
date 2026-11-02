@@ -1,5 +1,7 @@
 """Track B sprint (EXPLORATORY): finalist rules and helper metrics."""
 
+import datetime as _dt
+
 import pandas as pd
 
 from drishti.replay import sprint
@@ -26,3 +28,13 @@ def test_c1_verdict_needs_both_benchmarks():
     yr2 = yr | {2021: {"months": 12, "ex_n500": 0.1, "ex_ew": -0.01},
                 2022: {"months": 12, "ex_n500": -0.1, "ex_ew": 0.1}}
     assert not sprint.verdict_c1(dict(m, by_year=yr2))["finalist_ok"]
+
+
+def test_fy_tax_rates_exemption_and_set_off():
+    cf = {"st": 0.0, "lt": 0.0}
+    assert abs(sprint.fy_tax(100_000, 0, cf) - 1.04 * 20_000) < 1e-6           # STCG 20 %
+    assert abs(sprint.fy_tax(0, 225_000, cf) - 1.04 * 12_500) < 1e-6           # 12.5 % above 1.25 L
+    assert sprint.fy_tax(-50_000, 100_000, cf) == 0.0                          # STCL offsets LTCG
+    assert sprint.fy_tax(0, -30_000, cf) == 0.0 and cf["lt"] == 30_000          # LTCL carried
+    assert sprint.fy_tax(40_000, 0, cf) > 0 and cf["lt"] == 30_000              # not against STCG
+    assert sprint.fy(_dt.date(2025, 3, 31)) == 2024 and sprint.fy(_dt.date(2025, 4, 1)) == 2025
