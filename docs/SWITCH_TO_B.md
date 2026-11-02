@@ -185,6 +185,7 @@ diff ~/crontab_before_B.txt ~/crontab_B.txt     # review
    2. **~19:30:** the user installs the cron diff (6.1); the dashboard is stopped; the news collector is stopped if D2 = stop.
    3. **20:30: the mandatory final full `pg_dump -Fc` of the frozen `prajna` DB** (DEVIATIONS D3), on /windows, with sha256 and a `pg_restore -l` check (plus a test restore if space allows). Then the **delta copy** (rows with `fetched_at` after the first copy) and its verification. **Prajna is frozen from here**, and nothing in it changes before that dump is verified.
    4. Prajna's token of S (06:30 login) expires at ~03:30 Saturday, so no two Upstox owners overlap.
+   5. **Raise the Postgres container's `/dev/shm` from the Docker default 64 MB to 1 GB** (`shm_size: 1g` in its compose file, then recreate the container). This needs a container restart, so it waits until Prajna is stopped. Context: 12 "could not resize shared memory segment" errors on 10-30/11-02, from Drishti's unfiltered CA query. That query is fixed in code (`4e481fb`); the larger shm is headroom for parallel queries.
 5. **S+1 (Saturday):**
    1. 06:10 Drishti's first own login;
    2. 06:30 official 1d of S, which Prajna never fetched, so there is no gap. It re-fetches S−5..S−1 and compares them with the copy;

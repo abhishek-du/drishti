@@ -14,7 +14,9 @@ INDEX_KEYS = (
     "NSE_INDEX|Nifty Realty", "NSE_INDEX|Nifty Energy", "NSE_INDEX|Nifty Media",
     "NSE_INDEX|Nifty PSU Bank", "NSE_INDEX|Nifty Pvt Bank", "NSE_INDEX|Nifty Fin Service",
     "NSE_INDEX|Nifty Infra", "NSE_INDEX|Nifty500 Health", "NSE_INDEX|Nifty Commodities",
-    "NSE_INDEX|Nifty Consumption", "NSE_INDEX|Nifty Cement")
+    "NSE_INDEX|Nifty Consumption", "NSE_INDEX|Nifty Cement",
+    # benchmarks added 2026-11-02 (user): Nifty 200, Nifty 500 Equal Weight, Midcap150 Momentum 50
+    "NSE_INDEX|Nifty 200", "NSE_INDEX|Nifty500 EW", "NSE_INDEX|NiftyM150Momntm50")
 
 
 def parse_candles(candles: list[list]) -> list[dict]:

@@ -22,7 +22,7 @@ if [ "$JOB" = live ]; then
 fi
 say "DRISHTI_${JOB^^}_START"
 OUT="var/logs/${JOB}_$(TZ=Asia/Kolkata date +%F_%H%M).json"
-case "$JOB" in scout) MOD=drishti.run.p2 ;; *) MOD=drishti.run.p1 ;; esac
+case "$JOB" in scout) MOD=drishti.run.p2 ;; status) MOD=drishti.run.status ;; *) MOD=drishti.run.p1 ;; esac
 if .venv/bin/python -m "$MOD" "$JOB" > "$OUT" 2>&1; then
   say "DRISHTI_${JOB^^}_OK $(tr -d '\n ' < "$OUT" | cut -c1-200)"
 else
