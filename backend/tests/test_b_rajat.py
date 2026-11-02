@@ -108,3 +108,31 @@ def test_x0_exits_the_full_position_at_t1_and_min_rr_is_a_parameter():
     finally:
         import importlib
         importlib.reload(rajat)
+
+
+def _sw(rows, mode, e=100.0, s=98.0, T1=None, last=None):
+    A = _A(rows)
+    lv = {"T1": T1, "T2": None, "R1_top": None, "R": e - s, "q": 5000, "status": "OK"}
+    return rajat.path_sw(A, 0, last if last is not None else len(rows) - 1, e, s, lv, mode)
+
+
+def test_sw_c_target_stop_and_eod():
+    assert _sw([(100, 103.5, 99.5, 103)], "SWc", T1=103.0)["fills"] == [(103.0, 1.0, 0, "TP")]
+    assert _sw([(100, 103.5, 97.5, 103)], "SWc", T1=103.0)["fills"] == [(98.0, 1.0, 0, "SL")]
+    assert _sw([(100, 101, 99, 100.5), (100.5, 101, 99, 100.8)], "SWc", T1=103.0)["fills"] \
+        == [(100.8, 1.0, 1, "TIME")]
+
+
+def test_sw_a_partial_then_breakeven_trail():
+    rows = [(100, 102.1, 99.5, 101.8), (101.8, 102.5, 101.5, 102.2), (102, 102.1, 100.9, 101)]
+    p = _sw(rows, "SWa", T1=102.0)
+    # 50 % at 102; stop -> max(100, 99.5) = 100 then trails to the previous lows: 101.5
+    assert p["fills"] == [(102.0, 0.5, 0, "PARTIAL"), (101.5, 0.5, 2, "TRAIL")]
+
+
+def test_sw_d_trails_only_after_plus_1r():
+    rows = [(100, 101, 99, 100.5), (100.5, 102.2, 100.2, 102), (102, 102.5, 100.1, 101)]
+    p = _sw(rows, "SWd")                                          # +1R = 102 hit on bar 1
+    assert p["fills"] == [(100.2, 1.0, 2, "TRAIL")]
+    rows2 = [(100, 101, 99, 100.5), (100.5, 101.5, 98.5, 99)]
+    assert _sw(rows2, "SWd")["fills"] == [(99.0, 1.0, 1, "TIME")]   # no trail, stop 98 holds

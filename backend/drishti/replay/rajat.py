@@ -38,7 +38,10 @@ VARIANTS = {"RJ1": ("daily", True, "E1", "X1"), "RJ2": ("daily", True, "E1", "X2
             "RJ5": ("15m", True, "E1", "X1"), "RJ6": ("15m", True, "E1", "X2"),
             # 15m min-RR test (user 2026-11-02): only the minimum RR (and RJ9's exit) changes
             "RJ7": ("15m", True, "E1", "X1", 1.0), "RJ8": ("15m", True, "E1", "X1", 1.5),
-            "RJ9": ("15m", True, "E1", "X0", 1.0)}
+            "RJ9": ("15m", True, "E1", "X0", 1.0),
+            # SW exit test, the final test of the hammer entry (user approved 2026-11-02)
+            "SW-a": ("15m", True, "E1", "SWa"), "SW-b": ("15m", True, "E1", "SWb"),
+            "SW-c": ("15m", True, "E1", "SWc"), "SW-d": ("15m", True, "E1", "SWd")}
 WINDOWS = {"daily": {"dev": (_dt.date(2019, 9, 1), _dt.date(2023, 12, 31)),
                      "holdout": (_dt.date(2024, 1, 1), None)},
            "15m": {"dev": (_dt.date(2022, 1, 1), _dt.date(2024, 12, 31)),
@@ -86,7 +89,9 @@ def prep(df: pd.DataFrame) -> dict:
     shape = candles.shape_hammer(df.open, df.high, df.low, df.close, None).to_numpy()
     fall3 = candles.lower_closes(df.close).to_numpy()
     vavg = df.volume.shift(1).rolling(20, min_periods=20).mean().to_numpy()
+    from drishti.replay.baserates import swing_flags
     return {"o": o, "h": h, "lo": lo, "c": c, "v": v, "atr": atr, "ph": ph, "pl": pl,
+            "sw5": swing_flags(h, 5),
             "shape": shape, "fall3": fall3, "vavg": vavg, "n": len(df)}
 
 
@@ -204,6 +209,81 @@ def path(A: dict, first: int, last: int, e: float, s: float, lv: dict, mode: str
     return {"fills": fills, "hit_T1": hit1, "hit_T2": hit2}
 
 
+def levels_sw(A: dict, d: int, e: float, s: float, tf: str, mode: str) -> dict:
+    """SW-a..SW-d levels and skips (VARIANTS.md, 2026-11-02): SW5 = nearest confirmed strict
+    5-bar swing high above e known on bar d."""
+    from drishti.replay.baserates import nearest_swing
+    R = e - s
+    if R <= 0:
+        return {"status": "STOP_ABOVE_ENTRY"}
+    L = nearest_swing(A["h"], A["sw5"], 5, d, e)
+    a = float(A["atr"][d])
+    T1 = None
+    if mode == "SWa":
+        if not np.isfinite(L):
+            return {"status": "NO_LEVEL"}
+        if L - e < 0.5 * R:
+            return {"status": "SKIP_NEAR"}
+        T1 = L - 0.05 * a
+    elif mode == "SWb":
+        if np.isfinite(L) and L - e <= R:
+            return {"status": "SKIP_OBSTRUCTION"}
+        T1 = e + 2 * R
+    elif mode == "SWc":
+        T1 = e + 1.5 * a
+    q = max(1, math.floor(RISK_INR / R))
+    est = T1 if T1 is not None else e + R
+    if trade_cost(tf, e, q, [(est, q, 0)], 10) / q / R > 0.15:
+        return {"status": "SKIP_COST"}
+    return {"status": "OK", "q": q, "T1": T1, "T2": None, "R1_top": None, "R": R,
+            "SW5": L if np.isfinite(L) else None}
+
+
+def path_sw(A: dict, first: int, last: int, e: float, s: float, lv: dict, mode: str
+            ) -> dict | None:
+    """SW-a..SW-d exit paths: stop first (gap through at the open); SW-b/SW-c target; SW-a 50 %
+    at P then a breakeven trail on the previous bar's low; SW-d a trail on the previous bar's low
+    once high >= E + 1R; the rest exits at the close of `last` (EOD)."""
+    o, h, lo, c = A["o"], A["h"], A["lo"], A["c"]
+    T1, R = lv["T1"], e - s
+    frac, stop, trail, hit, fills = 1.0, s, False, False, []
+    for i in range(first, last + 1):
+        if i >= A["n"]:
+            return None
+        kind = "TRAIL" if stop > s else "SL"
+        if o[i] < stop:
+            fills.append((float(o[i]), frac, i, kind))
+            frac = 0.0
+            break
+        if lo[i] <= stop:
+            fills.append((stop, frac, i, kind))
+            frac = 0.0
+            break
+        if mode in ("SWb", "SWc"):
+            if o[i] >= T1 or h[i] >= T1:
+                fills.append((max(T1, float(o[i])), frac, i, "TP"))
+                frac, hit = 0.0, True
+                break
+        elif mode == "SWa":
+            if not hit and h[i] >= T1:
+                fills.append((max(T1, float(o[i])), 0.5, i, "PARTIAL"))
+                frac, hit = 0.5, True
+                stop = max(e, float(lo[i]))
+            elif hit:
+                stop = max(stop, float(lo[i]))
+        elif mode == "SWd":
+            if not trail and h[i] >= e + R:
+                trail = True
+            if trail:
+                stop = max(stop, float(lo[i]))
+        if i == last:
+            fills.append((float(c[i]), frac, i, "TIME"))
+            frac = 0.0
+    if frac > 0:
+        return None
+    return {"fills": fills, "hit_T1": hit, "hit_T2": False}
+
+
 def result(A, dates, tf, e, s, lv, p, e_i) -> dict:
     q = lv["q"]
     first_n = q // 2 if len(p["fills"]) > 1 else q
@@ -264,7 +344,10 @@ def stock_job(args) -> tuple[list, list, dict]:
                     continue
                 e, e_i, first, fill_bar = float(A["o"][d + 1]), d + 1, d + 1, True
             s = float(A["lo"][t] - 0.1 * A["atr"][t])
-            lv = levels_for(A, d, e, s, tf, min_rr)
+            if mode == "SWc":
+                s = e - float(A["atr"][d])
+            lv = levels_sw(A, d, e, s, tf, mode) if mode.startswith("SW") else \
+                levels_for(A, d, e, s, tf, min_rr)
             if lv["status"] != "OK":
                 sk[lv["status"]] = sk.get(lv["status"], 0) + 1
                 continue
@@ -272,7 +355,8 @@ def stock_job(args) -> tuple[list, list, dict]:
             if tf == "15m" and first > last:
                 sk["NO_TIME"] = sk.get("NO_TIME", 0) + 1
                 continue
-            p = path(A, first, last, e, s, lv, mode, fill_bar)
+            p = path_sw(A, first, last, e, s, lv, mode) if mode.startswith("SW") else \
+                path(A, first, last, e, s, lv, mode, fill_bar)
             if p is None:
                 sk["OPEN"] = sk.get("OPEN", 0) + 1
                 continue
@@ -300,13 +384,15 @@ def stock_job(args) -> tuple[list, list, dict]:
                 else:
                     ep, pe_i, pf, pfb = float(A["o"][P + 1]), P + 1, P + 1, True
                 sp = ep - k_atr * A["atr"][P]
-                plv = levels_for(A, P, ep, sp, tf, min_rr)
+                plv = levels_sw(A, P, ep, sp, tf, mode) if mode.startswith("SW") else \
+                    levels_for(A, P, ep, sp, tf, min_rr)
                 if plv["status"] != "OK":
                     continue
                 pl = (pe_i + HOLD_DAILY) if tf == "daily" else last_of_day[pe_i]
                 if pf > pl:
                     continue
-                pp = path(A, pf, pl, ep, sp, plv, mode, pfb)
+                pp = path_sw(A, pf, pl, ep, sp, plv, mode) if mode.startswith("SW") else \
+                    path(A, pf, pl, ep, sp, plv, mode, pfb)
                 if pp is None:
                     continue
                 pr = result(A, dates, tf, ep, sp, plv, pp, pe_i)
