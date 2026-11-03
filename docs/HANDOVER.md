@@ -83,6 +83,11 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **Cron lines not yet installed** (`ops/cron.txt`): `news` every 30 min, and the 3 scanner lines (`scan_eod` 19:45, `scan_intraday` every 15 min, `scan_grade` 09:45). The crontab has 13 Drishti lines now; with all four it becomes 17, and 18 with `intraday` (01:00).
 - **Telegram for the scanner:** optional; set `DRISHTI_TELEGRAM_BOT_TOKEN` and `DRISHTI_TELEGRAM_CHAT_ID` in `backend/.env` (otherwise the alert list is only logged).
 
+**Asked 2026-11-03, waiting for the user:**
+- A git remote for Drishti (none is configured; "push" is not possible yet). A private repo is recommended.
+- `drishti/data/live_quote.py` (committed `7b9b11a` from another session on user order) calls the Upstox quote API from the chart during market hours with Prajna's shared token: keep, restrict to after 15:35, or remove.
+- Next for Track A: the re-point (Drishti reads → copy + own ingest, behind a flag), then full copy #1 on 11-11 night.
+
 ## 6. Hard rules (summary; the full text is in `CLAUDE.md`)
 
 - **PAPER ONLY.**
