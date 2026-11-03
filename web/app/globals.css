@@ -752,7 +752,7 @@ main:has(.stockpage) {
   z-index: 5;
   left: 10px;
   top: 4px;
-  right: 130px;
+  right: 10px;
   font-size: 12px;
   pointer-events: none;
   white-space: nowrap;
@@ -761,13 +761,19 @@ main:has(.stockpage) {
   font-family: var(--font-mono, monospace);
 }
 
-.kc-trend {
-  position: absolute;
-  z-index: 5;
-  right: 10px;
-  top: 4px;
-  font-size: 11px;
-}
+.kc-status { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding: 4px 8px;
+  border-bottom: 1px solid var(--line); font-size: 12px; }
+.kc-status .pill { font-size: 11.5px; }
+.kc-status button.pill { cursor: pointer; background: transparent; }
+.kc-status-note { font-size: 11px; }
+.kc-why { position: relative; }
+.kc-why-pop { position: absolute; z-index: 30; left: 0; top: calc(100% + 6px); width: min(460px, calc(100vw - 40px));
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.25); font-size: 12.5px; line-height: 1.45; }
+.kc-why-pop ul { margin: 6px 0; padding-left: 18px; }
+.kc-why-pop li.ok::marker { color: var(--up); }
+.kc-why-pop li.no::marker { color: var(--down); }
+.kc-legend-pat { color: #12b886; }
 
 .kc-livetag {
   position: absolute;
@@ -940,11 +946,11 @@ pre.terminal {
     font-size: 13px;
   }
   .kc-canvas {
-    top: 74px;   /* room for the trend badge and the legend's up to three lines above the indicator rows */
+    top: 52px;   /* room for the legend's up to three lines above the indicator rows */
   }
   .kc-legend {
     right: 8px;
-    top: 28px;
+    top: 4px;
     white-space: normal;
     font-size: 11px;
     line-height: 1.3;

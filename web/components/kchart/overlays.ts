@@ -1,5 +1,5 @@
 // Drawing tools (built-in KLineChart overlays plus a few of our own) and the Drishti layers.
-import { OverlayTemplate, registerOverlay } from "klinecharts";
+import { OverlayFigure, OverlayTemplate, registerOverlay } from "klinecharts";
 
 export type Tool = { name: string; label: string; icon: string; key?: string };
 export const TOOLS: Tool[] = [
@@ -60,26 +60,42 @@ const note: OverlayTemplate = {
   }],
 };
 
-// Drishti S/R zone: a band across the whole width (points: top, bottom; label in extendData)
-const zone: OverlayTemplate = {
-  name: "d_zone", totalStep: 3, lock: true, needDefaultPointFigure: false,
-  createPointFigures: ({ coordinates, bounding, overlay }) => {
-    if (coordinates.length < 2) return [];
-    const y0 = Math.min(coordinates[0].y, coordinates[1].y), y1 = Math.max(coordinates[0].y, coordinates[1].y);
-    return [
-      { type: "rect", ignoreEvent: true, attrs: { x: 0, y: y0, width: bounding.width, height: Math.max(1, y1 - y0) }, styles: { style: "fill", color: "rgba(120,120,140,.14)" } },
-      { type: "text", ignoreEvent: true, attrs: { x: 4, y: y0, text: String(overlay.extendData ?? ""), align: "left", baseline: "bottom" }, styles: { color: "#667085", backgroundColor: "transparent", size: 11, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 1 } },
-    ];
+// Drishti S/R zones, all in one overlay so the labels can be laid out together: bands across the
+// whole width; a label is skipped when it would sit within LABEL_GAP px of one already drawn or
+// outside the pane (extendData: [{top, bottom, label}])
+const LABEL_GAP = 15;
+const zones: OverlayTemplate = {
+  name: "d_zones", totalStep: 2, lock: true, needDefaultPointFigure: false,
+  createPointFigures: ({ bounding, overlay, yAxis }) => {
+    if (!yAxis) return [];
+    const zs = (overlay.extendData ?? []) as { top: number; bottom: number; label: string }[];
+    const bands = zs.map((z) => {
+      const a = yAxis.convertToPixel(z.top), b = yAxis.convertToPixel(z.bottom);
+      return { y0: Math.min(a, b), y1: Math.max(a, b), label: z.label };
+    });
+    const figs: OverlayFigure[] = bands.map((z) => ({ type: "rect", ignoreEvent: true,
+      attrs: { x: 0, y: z.y0, width: bounding.width, height: Math.max(1, z.y1 - z.y0) }, styles: { style: "fill", color: "rgba(120,120,140,.14)" } }));
+    let last = -Infinity;
+    [...bands].sort((p, q) => p.y0 - q.y0).forEach((z) => {
+      if (z.y0 < 14 || z.y0 > bounding.height - 4 || z.y0 - last < LABEL_GAP) return;
+      last = z.y0;
+      figs.push({ type: "text", ignoreEvent: true, attrs: { x: 4, y: z.y0, text: z.label, align: "left", baseline: "bottom" },
+        styles: { color: "#8a94a6", backgroundColor: "rgba(15,17,21,.55)", size: 10, paddingLeft: 3, paddingRight: 3, paddingTop: 1, paddingBottom: 1, borderRadius: 2 } });
+    });
+    return figs;
   },
 };
 
-// Drishti candle-pattern label under a bar (point = the bar's low; extendData = {text, bull})
+// Drishti candle-pattern marker under a bar (point = the bar's low; extendData = {bull}): a small
+// triangle only, so markers never collide; the pattern names show in the legend on hover and in
+// the bar card on click
 const pattern: OverlayTemplate = {
   name: "d_pat", totalStep: 2, lock: true, needDefaultPointFigure: false,
   createPointFigures: ({ coordinates, overlay }) => {
-    const e = (overlay.extendData ?? {}) as { text?: string; bull?: boolean };
-    return [{ type: "text", ignoreEvent: true, attrs: { x: coordinates[0].x, y: coordinates[0].y + 6, text: `▲ ${e.text ?? ""}`, align: "center", baseline: "top" },
-      styles: { color: e.bull ? "#12805c" : "#868e96", backgroundColor: "transparent", size: 10, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } }];
+    const e = (overlay.extendData ?? {}) as { bull?: boolean };
+    const { x, y } = coordinates[0];
+    return [{ type: "polygon", ignoreEvent: true, attrs: { coordinates: [{ x, y: y + 5 }, { x: x - 3.5, y: y + 11 }, { x: x + 3.5, y: y + 11 }] },
+      styles: { style: "fill", color: e.bull ? "#12b886" : "#868e96" } }];
   },
 };
 
@@ -87,7 +103,7 @@ let registered = false;
 export function registerOverlays() {
   if (registered) return;
   registered = true;
-  [rect, measure, note, zone, pattern].forEach((o) => registerOverlay(o));
+  [rect, measure, note, zones, pattern].forEach((o) => registerOverlay(o));
 }
 
 // --- user drawings: saved per stock and timeframe in this browser (no DB writes) -------------

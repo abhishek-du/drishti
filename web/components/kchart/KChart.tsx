@@ -24,6 +24,8 @@ export type BarsData = {
   candles: { time: string | number; flags: string[] }[]; bullish_flags: string[];
   zones: { price: number; bottom: number; top: number; touches: number }[];
   trend: "UP" | "DOWN" | "SIDE";
+  trend_detail: { class: "UP" | "DOWN" | "SIDE"; ma_trend: "UP" | "DOWN" | "FLAT"; text: string; note: string;
+                  conditions: { name: string; ok: boolean; text: string }[] };
   last: { ema20: number | null; sma50: number | null; vwap: number | null; rsi: number | null; atr: number | null; close: number | null };
   bias: { label: string; text: string; rules: { rule: string; state: unknown; text: string }[] };
 };
@@ -174,13 +176,15 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
     c.removeOverlay({ groupId: "drishti" });
     const t0 = bars.current[0].timestamp, t1 = bars.current[bars.current.length - 1].timestamp;
     const ov: OverlayCreate[] = [];
-    if (layers.zones) d.zones.forEach((z) => ov.push({ name: "d_zone", groupId: "drishti", lock: true, extendData: `S/R zone ×${z.touches} · ${z.price.toFixed(2)}`, points: [{ timestamp: t0, value: z.top }, { timestamp: t1, value: z.bottom }] }));
+    if (layers.zones && d.zones.length) ov.push({ name: "d_zones", groupId: "drishti", lock: true,
+      extendData: d.zones.map((z) => ({ top: z.top, bottom: z.bottom, label: `S/R ×${z.touches} · ${z.price.toFixed(2)}` })),
+      points: [{ timestamp: t0, value: d.zones[0].price }] });
     if (layers.patterns !== "off") {
       const bull = new Set(d.bullish_flags);
       const low = new Map(d.bars.map((b) => [ts(b.time), b.low]));
       d.candles.forEach((m) => {
         const fl = layers.patterns === "all" ? m.flags : m.flags.filter((f) => bull.has(f));
-        if (fl.length) ov.push({ name: "d_pat", groupId: "drishti", lock: true, extendData: { text: fl.join(", "), bull: fl.some((f) => bull.has(f)) }, points: [{ timestamp: ts(m.time), value: low.get(ts(m.time)) }] });
+        if (fl.length) ov.push({ name: "d_pat", groupId: "drishti", lock: true, extendData: { bull: fl.some((f) => bull.has(f)) }, points: [{ timestamp: ts(m.time), value: low.get(ts(m.time)) }] });
       });
     }
     if (ov.length) c.createOverlay(ov);
@@ -441,6 +445,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
           <button onClick={() => setMenu("")}>Close</button>
         </div>
       )}
+      {layers.trend && d && <TrendStrip d={d} live={live} />}
       <div className="kc-body">
         <div className="kc-tools" role="toolbar" aria-label="Drawing tools">
           {TOOLS.map((t) => <button key={t.name} title={t.label} className={pending?.name === t.name ? "sel" : ""} aria-pressed={pending?.name === t.name}
@@ -462,15 +467,11 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
               O <b>{fmt(lb.open)}</b> H <b>{fmt(lb.high)}</b> L <b>{fmt(lb.low)}</b> C <b>{fmt(lb.close)}</b>{" "}
               <span style={{ color: (chg ?? 0) >= 0 ? "var(--up)" : "var(--down)" }}>{chg === null || !prev ? "" : `${chg >= 0 ? "+" : ""}${fmt(chg)} (${fmt((100 * chg) / prev.close)}%)`}</span>{" "}
               <span className="muted">Vol {(lb.volume ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
+              {(() => { const f = d.candles.find((m) => ts(m.time) === lb.timestamp)?.flags; return f?.length ? <span className="kc-legend-pat"> ▲ {f.join(", ")}</span> : null; })()}
             </div>
           )}
           {cardOpen && hover && lb && d && <BarCard d={d} k={lb} prev={prev} when={when} x={hover.x} width={box.current?.clientWidth ?? 0} live={live}
             inds={chart.current?.getIndicators() ?? []} i={li} />}
-          {layers.trend && d && (
-            <div className={`kc-trend pill ${d.trend === "UP" ? "on" : d.trend === "DOWN" ? "off" : ""}`} title="Spec section 3 trend rule">
-              Trend {d.tf}: {d.trend}{live ? " · live view" : ""}
-            </div>
-          )}
           {live && <span className="pill warn kc-livetag">{LIVE_LABEL}</span>}
           {pending && (
             <div className="kc-hint">
@@ -532,6 +533,35 @@ function BarCard({ d, k, prev, when, x, width, live, inds, i }: {
         </>}
       </tbody></table>
       <div className="muted small" style={{ marginTop: 4 }}>Next candle / candle after: what later candles did (hindsight). NOT a prediction; not used by drishti-swing-v1.</div>
+    </div>
+  );
+}
+
+// spec trend (levels.trend) with its reasons, and the MA-only trend; decision support only
+function TrendStrip({ d, live }: { d: BarsData; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const t = d.trend_detail;
+  const cls = (v: string) => (v === "UP" ? "on" : v === "DOWN" ? "off" : "");
+  return (
+    <div className="kc-status">
+      <span className="kc-why" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+        <button className={`pill ${cls(t.class)}`} onClick={() => setOpen(!open)} aria-expanded={open}
+          title="Spec section 3 trend rule (levels.trend): click or hover for the reason">
+          Spec trend {d.tf}: <b>{t.class}</b> ⓘ
+        </button>
+        {open && (
+          <div className="kc-why-pop" role="tooltip">
+            <b>Spec trend {d.tf}: {t.class}</b>
+            <div className="muted small">UP needs all three; DOWN needs the mirror (spec §3, unchanged).</div>
+            <ul>{t.conditions.map((c) => <li key={c.name} className={c.ok ? "ok" : "no"}>{c.text}</li>)}</ul>
+            <div className="muted small">{t.note}{live ? " · LIVE VIEW" : ""}</div>
+          </div>
+        )}
+      </span>
+      <span className={`pill ${cls(t.ma_trend)}`} title="close vs SMA50 vs SMA200 only (more responsive than the spec rule); not used by drishti-swing-v1">
+        MA trend: <b>{t.ma_trend}</b>
+      </span>
+      <span className="muted kc-status-note">not used by drishti-swing-v1{live ? " · LIVE VIEW" : ""}</span>
     </div>
   );
 }

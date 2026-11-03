@@ -290,3 +290,29 @@ def test_hindsight_confirmation():
 def test_bars_carry_hindsight(client):
     b = client.get("/api/chart2/bars", params={"key": "K", "tf": "5m"}).json()["bars"]
     assert {"dir", "confirm", "follow"} <= b[0].keys() and b[-1]["confirm"] in ("pending", None)
+
+
+def test_trend_detail_matches_levels_trend():
+    """The reasons shown reproduce levels.trend's class (frozen spec rule) and the MA chip uses
+    close vs SMA50 vs SMA200 only."""
+    n = 300
+    up = np.linspace(100, 200, n) + 3 * np.sin(np.arange(n) / 3)
+    df = pd.DataFrame({"open": up, "close": up, "high": up + 1, "low": up - 1, "volume": 1.0})
+    for d in (df, df.iloc[:120].reset_index(drop=True),
+              df[["open", "close", "high", "low"]].mul(-1).add(400).rename(
+                  columns={"high": "low", "low": "high"}).assign(volume=1.0)):
+        ind = indicators.basic(d)
+        t = chart_api.trend_detail(d, ind)
+        assert t["class"] == levels.trend(d, ind)
+        assert t["ma_trend"] in ("UP", "DOWN", "FLAT") and len(t["conditions"]) == 3
+        assert t["text"].startswith(t["class"] + " — ") and "drishti-swing-v1" in t["note"]
+        if t["class"] == "UP":
+            assert all(x["ok"] for x in t["conditions"]) and t["ma_trend"] == "UP"
+    flat = df.copy(); flat.loc[flat.index[-1], "close"] = 0.5          # close below both SMAs
+    ind = indicators.basic(flat)
+    assert chart_api.trend_detail(flat, ind)["ma_trend"] == "FLAT"   # SMA50 > SMA200: not DOWN either
+
+
+def test_bars_carry_trend_detail(client):
+    j = client.get("/api/chart2/bars", params={"key": "K", "tf": "1d"}).json()
+    assert j["trend_detail"]["class"] == j["trend"] and "conditions" in j["trend_detail"]

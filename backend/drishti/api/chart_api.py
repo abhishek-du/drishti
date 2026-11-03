@@ -47,6 +47,65 @@ def heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
                      low=np.minimum.reduce([lo, ho, hc]))
 
 
+TREND_NOTE = "decision support only; not used by drishti-swing-v1"
+
+
+def _n(x: float) -> str:
+    return f"{x:,.2f}".rstrip("0").rstrip(".")
+
+
+def trend_detail(df: pd.DataFrame, ind: pd.DataFrame) -> dict:
+    """Why the spec section 3 trend class (levels.trend) is what it is on the last bar, from the
+    same shared pieces it uses (levels.pivot_flags, levels.last_two_pivots,
+    indicators.trend_class), plus the "MA trend" (close vs SMA50 vs SMA200 only). Display only;
+    the class itself is levels.trend's."""
+    cls = levels.trend(df, ind)
+    h, lo = df.high.to_numpy(float), df.low.to_numpy(float)
+    c, s50, s200 = float(df.close.iloc[-1]), float(ind.sma50.iloc[-1]), float(ind.sma200.iloc[-1])
+    ph, pl = levels.pivot_flags(h, lo)
+    ph1, ph2, ih = (a[-1] for a in levels.last_two_pivots(h, ph))
+    pl1, pl2, il = (a[-1] for a in levels.last_two_pivots(lo, pl))
+    has = lambda *v: all(not np.isnan(x) for x in v)  # noqa: E731
+    ma = "UP" if has(s50, s200) and c > s50 > s200 else \
+        "DOWN" if has(s50, s200) and c < s50 < s200 else "FLAT"
+    up = ma != "DOWN"                      # conditions shown for the direction the MAs point to
+    # extremes after the last confirmed pivot (a pivot is known 5 bars later)
+    new_hi = float(h[int(ih) + 1:].max()) if has(ih) and int(ih) + 1 < len(h) else np.nan
+    new_lo = float(lo[int(il) + 1:].min()) if has(il) and int(il) + 1 < len(lo) else np.nan
+    conds = []
+    if has(s50, s200):
+        rel = ">" if up else "<"
+        good = ma == ("UP" if up else "DOWN")
+        conds.append({"name": f"close {rel} SMA50 {rel} SMA200", "ok": good,
+                      "text": f"MA: {ma} (close{rel}SMA50{rel}SMA200 {'✓' if good else '✗'}: "
+                              f"{_n(c)}, {_n(s50)}, {_n(s200)})"})
+    else:
+        conds.append({"name": "close vs SMA50 vs SMA200", "ok": False,
+                      "text": "MA: not enough bars for SMA200"})
+    for name_up, name_dn, p1, p2, nx, kind in (("higher-high", "lower-high", ph1, ph2, new_hi, "high"),
+                                               ("higher-low", "lower-low", pl1, pl2, new_lo, "low")):
+        name = name_up if up else name_dn
+        if not has(p1, p2):
+            conds.append({"name": name, "ok": False, "text": f"{name}: fewer than two confirmed pivot {kind}s"})
+            continue
+        good = p1 > p2 if up else p1 < p2
+        sign = ">" if p1 > p2 else "<" if p1 < p2 else "="
+        txt = f"{name} {'✓' if good else '✗'} (last confirmed {kind} {_n(p1)} {sign} {_n(p2)}"
+        beyond = has(nx) and ((nx > p1) if kind == "high" else (nx < p1))
+        if beyond:
+            txt += f"; new {kind} {_n(nx)} not yet confirmed"
+        conds.append({"name": name, "ok": bool(good), "text": txt + ")"})
+    # the shown conditions must reproduce levels.trend's class (same rule, same inputs)
+    assert int(indicators.trend_class(np.array([c]), np.array([s50]), np.array([s200]),
+                                      np.array([ph1]), np.array([ph2]), np.array([pl1]),
+                                      np.array([pl2]))[0]) == {"UP": 1, "DOWN": -1, "SIDE": 0}[cls]
+    text = f"{cls} — " + "; ".join(x["text"] for x in conds)
+    return {"class": cls, "ma_trend": ma, "conditions": conds, "text": text,
+            "pivots": {"high_last": _f(ph1), "high_prev": _f(ph2), "low_last": _f(pl1),
+                       "low_prev": _f(pl2), "new_high": _f(new_hi), "new_low": _f(new_lo)},
+            "note": TREND_NOTE}
+
+
 def hindsight(df: pd.DataFrame) -> list[dict]:
     """Per bar: its colour, and what the NEXT candles did (display only, uses later bars; not a
     prediction and not used by drishti-swing-v1).
@@ -118,6 +177,7 @@ def compute(df: pd.DataFrame, tf: str) -> dict:
         "zones": [{k: (_f(v) if isinstance(v, float) else v) for k, v in z.items()}
                   | {"first": t[z["first"]], "last": t[z["last"]]} for z in zs],
         "trend": tr,
+        "trend_detail": trend_detail(df, ind),
         "last": {**last, "atr": _f(atr), "close": _f(close)},
         "bias": bias(close, tr, last, sup, res, _f(atr)),
     }
