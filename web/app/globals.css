@@ -1018,3 +1018,32 @@ pre.terminal {
   .seg button { padding: 6px 9px; font-size: 12.5px; }
   .fld.inline input { width: 132px; }
 }
+
+/* journal headline: three-way comparison + gap */
+.three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 6px 0 10px; }
+.three-card { background: var(--card); border: 1px solid var(--card-border); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+.three-card.you { border-color: var(--accent); }
+.three-card.placebo { border-style: dashed; border-color: var(--line-strong); }
+.three-title { font-weight: 700; font-size: 14px; }
+.three-big { font-size: 30px; font-weight: 800; margin: 8px 0 2px; font-variant-numeric: tabular-nums; }
+.three-pct { font-size: 15px; font-weight: 700; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.pos { color: var(--up); } .neg { color: var(--down); }
+.gapbox { background: var(--card); border: 2px solid var(--accent); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+.gap-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.gap-k { font-weight: 700; font-size: 16px; }
+.gap-v { font-size: 30px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.gap-p { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.gap-n { font-size: 15px; }
+.gap-warn { margin: 6px 0 4px; font-weight: 700; color: var(--warn); }
+@media (max-width: 760px) {
+  .three { grid-template-columns: 1fr; gap: 8px; }
+  .three-big, .gap-v { font-size: 24px; }
+}
+.headline { display: flex; flex-direction: column; }
+@media (max-width: 760px) {
+  .headline .gapbox { order: -1; margin: 6px 0 8px; }   /* the gap first on a phone */
+  .three-card { padding: 9px 12px; }
+  .three-big { font-size: 22px; margin: 4px 0 0; }
+  .three-pct { font-size: 13.5px; margin-bottom: 2px; }
+}
+.gapbox.thin .gap-v, .gapbox.thin .gap-p { color: var(--fg); }   /* under ~40 trades: no green/red verdict */
