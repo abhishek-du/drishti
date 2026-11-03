@@ -38,6 +38,7 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **Model #1** (LightGBM + isotonic, purged walk-forward): AUC ~0.50, BSS ~0.
 - **Power check:** spec_gate is OFF (Nifty 500 < SMA200), so v1 makes **zero** entries in the current regime.
 - **Research sprint** (`DESIGN.md`, "Research sprint result"): no candidate's entry beat random entry with the same exits. The only finalist, C3b (PEAD, 60 sessions), failed its holdout (−0.202 R vs placebo). **The holdout window 2025-01-01 → 2026-10-21 has been used once; do not reuse it.**
+- **Momentum book C1a CLOSED (2026-11-03):** after tax it ties/loses to a Nifty200 Momentum 30 index fund; excess-return DSR at N≈30 = 0.23–0.27. No momentum forward test.
 - **Rajat setup** (Track B, after the sprint): every variant failed on the development window; no holdout run.
 - **Data facts:**
   - The provisional (15:40) and official bars differ only in **close** (LTP vs NSE close); high and low were never revised in 3 sessions.

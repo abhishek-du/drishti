@@ -252,6 +252,23 @@ web/ (Next.js + lightweight-charts)   ops/ (runbooks + systemd user units)   doc
 4. Mask suspend.
 5. A new Bedrock key (optional, for the Narrator).
 
+## Momentum portfolio automation CLOSED (user, 2026-11-03)
+
+**Decision:** no momentum forward test, and no automated momentum book. C1a stays a research record only.
+
+**Why** (Track B after-tax check, `research/track-b/sprint/after_tax_check/after_tax_check.json`, merged helper `drishti/judge/dsr.py` @ `1470d85`; all survivorship-biased and EXPLORATORY):
+- **After tax it ties with or loses to a Nifty200 Momentum 30 index fund.**
+  - Holdout (21 months; the window already used once): C1a after-tax CAGR **−5.1 %** vs the fund **−6.2 %**, a tie within noise. C1a's max drawdown was deeper: **−20.3 %** vs **−15.9 %**.
+  - The C1a book pays short-term capital gains every rebalance; the fund defers tax.
+- **No edge survives deflation.** The Sharpe of the *excess* return over the index, deflated for N≈30 trials (TRIAL_LEDGER):
+  - development window: DSR **0.27** (0.28 at N=27);
+  - all months: DSR **0.23** (0.24 at N=27).
+
+  Both are far below the 0.95 bar. The raw-return DSR (0.71–0.90) only measures the momentum *factor* itself, and an index fund gives that factor more cheaply.
+- So the earlier holdout "PASS by +1.6 pp" (pre-tax, vs the price index) does not hold after tax and deflation.
+
+**What stays:** `judge/dsr.py` as an EXPLORATORY helper; any future candidate must clear DSR/SPA at N≈30 (Hammer section above). This decision does not touch the decision-support scanner (user tool, not an edge claim).
+
 ## Decision-support scanner + journal (user, 2026-11-03)
 
 **Label everywhere: "Decision support - detections are NOT validated edges. Your call. Paper only."**
@@ -315,7 +332,7 @@ A tool for the user's own discretionary paper trading. It is **not** a strategy,
 
 **Also recorded in the ledger:**
 - C1a (monthly momentum book) had a one-time holdout run by user override on 2026-11-02: PASS vs the Nifty200 Momentum 30 price index after costs, by +1.6 pp.
-- **This is the holdout window that had already been used once** (C3b). Treat it as supporting evidence only, not as a clean out-of-sample test. A C1a forward test, if wanted, needs the user's decision and its own pre-registration.
+- **This is the holdout window that had already been used once** (C3b). Treat it as supporting evidence only, not as a clean out-of-sample test. A C1a forward test, if wanted, needs the user's decision and its own pre-registration. **Superseded 2026-11-03: momentum automation CLOSED, no forward test (section "Momentum portfolio automation CLOSED").**
 - Descriptive NSE level base rates (swing high, previous-day high, opening-range high, high of day) are in `research/track-b/sprint/baserates/`.
 
 ## Research sprint result (user, 2026-10-29): no v2 frozen, forward test stays ON HOLD
