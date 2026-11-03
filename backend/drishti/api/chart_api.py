@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
 from drishti.api.chart_bias import bias
-from drishti.api.chart_data import TFS, load
+from drishti.api.chart_data import TFS, get_live_quote, load
 from drishti.core.db import prajna_sessionmaker, sessionmaker
 from drishti.features import candles, indicators, levels
 
@@ -153,6 +153,7 @@ async def chart_bars(key: str, tf: str = "1d", ha: bool = False) -> dict:
                        for i, (b, r) in enumerate(zip(out["bars"], hb.itertuples()))]
     return {"key": key, "tf": tf, "label": LIVE_LABEL if tf in ("1m", "5m") else None,
             "adjusted": tf == "1d", "heikin_ashi": ha, "sources": src,
+            "quote": get_live_quote(key),
             **await _meta(key, tf), **out}
 
 

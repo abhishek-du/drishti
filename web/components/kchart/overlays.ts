@@ -83,11 +83,44 @@ const pattern: OverlayTemplate = {
   },
 };
 
+// Drishti Buy/Sell Signal label (point = the bar's low for BUY, high for SELL)
+const signal: OverlayTemplate = {
+  name: "d_signal", totalStep: 2, lock: true, needDefaultPointFigure: false,
+  createPointFigures: ({ coordinates, overlay }) => {
+    const e = (overlay.extendData ?? {}) as { text?: string; side?: "BUY" | "SELL"; isFollow?: boolean };
+    const isBuy = e.side === "BUY";
+    const bg = isBuy
+      ? (e.isFollow ? "rgba(5, 150, 105, 0.95)" : "rgba(16, 185, 129, 0.9)")
+      : (e.isFollow ? "rgba(225, 29, 72, 0.95)" : "rgba(244, 63, 94, 0.9)");
+    const yOffset = isBuy ? 6 : -18;
+    return [{
+      type: "text", ignoreEvent: true,
+      attrs: {
+        x: coordinates[0].x,
+        y: coordinates[0].y + yOffset,
+        text: isBuy ? `▲ ${e.text ?? "BUY"}` : `▼ ${e.text ?? "SELL"}`,
+        align: "center",
+        baseline: isBuy ? "top" : "bottom",
+      },
+      styles: {
+        color: "#ffffff",
+        backgroundColor: bg,
+        borderRadius: 3,
+        paddingLeft: 4,
+        paddingRight: 4,
+        paddingTop: 1,
+        paddingBottom: 1,
+        size: 9,
+      },
+    }];
+  },
+};
+
 let registered = false;
 export function registerOverlays() {
   if (registered) return;
   registered = true;
-  [rect, measure, note, zone, pattern].forEach((o) => registerOverlay(o));
+  [rect, measure, note, zone, pattern, signal].forEach((o) => registerOverlay(o));
 }
 
 // --- user drawings: saved per stock and timeframe in this browser (no DB writes) -------------

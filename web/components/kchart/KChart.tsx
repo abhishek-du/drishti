@@ -18,6 +18,7 @@ export type BarsData = {
   key: string; tf: Tf; label: string | null; adjusted: boolean; heikin_ashi: boolean;
   sources: { source: string; bars: number; last_time: string | null }[];
   symbol: string | null; name: string | null; sector: string | null; watchlist_dates: string[];
+  quote?: { ltp: number; net_change: number; pct_change: number; open: number; high: number; low: number; volume: number; vwap: number | null; upper_circuit: number | null; lower_circuit: number | null; is_upper_circuit: boolean; is_lower_circuit: boolean } | null;
   bars: { time: string | number; open: number; high: number; low: number; close: number; volume: number; chg_pct: number | null;
           dir: "bull" | "bear" | "flat"; confirm: string | null; follow: string | null }[];
   lines: Record<string, Pt[]>; panes: Record<string, Pt[]>;
@@ -30,7 +31,7 @@ export type BarsData = {
 type CType = "candle_solid" | "candle_stroke" | "ohlc" | "line" | "area" | "ha";
 const CTYPES: [CType, string][] = [["candle_solid", "Candles"], ["candle_stroke", "Hollow candles"], ["ohlc", "Bars"], ["line", "Line"], ["area", "Area"], ["ha", "Heikin Ashi"]];
 type Scale = "normal" | "logarithm" | "percentage";
-type Layers = { zones: boolean; patterns: "bullish" | "all" | "off"; trend: boolean };
+type Layers = { zones: boolean; patterns: "bullish" | "all" | "off"; trend: boolean; signals: boolean; antiWhipsaw: boolean };
 type Magnet = "normal" | "weak_magnet" | "strong_magnet";
 
 export const ts = (t: string | number) => (typeof t === "number" ? t * 1000 : Date.parse(`${t}T00:00:00+05:30`));
@@ -53,7 +54,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const [err, setErr] = useState("");
   const [ctype, setCtype] = useState<CType>("candle_solid");
   const [scale, setScale] = useState<Scale>("normal");
-  const [layers, setLayers] = useState<Layers>({ zones: true, patterns: "bullish", trend: true });
+  const [layers, setLayers] = useState<Layers>({ zones: true, patterns: "bullish", trend: true, signals: true, antiWhipsaw: true });
   const [inds, setInds] = useState<Instance[]>(DEFAULT_SET);
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [magnet, setMagnet] = useState<Magnet>("weak_magnet");
@@ -75,7 +76,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   // preferences (per browser)
   useEffect(() => {
     setCtype(ls(LS.ctype, "candle_solid")); setScale(ls(LS.scale, "normal")); setInds(ls(LS.ind, DEFAULT_SET));
-    setLayers({ zones: true, patterns: "bullish", trend: true, ...ls(LS.layers, {}) }); setMagnet(ls(LS.magnet, "weak_magnet"));
+    setLayers({ zones: true, patterns: "bullish", trend: true, signals: true, antiWhipsaw: true, ...ls(LS.layers, {}) }); setMagnet(ls(LS.magnet, "weak_magnet"));
     const savedTheme = ls<"light" | "dark" | null>(LS.theme, null);
     setTheme(savedTheme || "dark");
     setReady(true);
@@ -181,6 +182,73 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
       d.candles.forEach((m) => {
         const fl = layers.patterns === "all" ? m.flags : m.flags.filter((f) => bull.has(f));
         if (fl.length) ov.push({ name: "d_pat", groupId: "drishti", lock: true, extendData: { text: fl.join(", "), bull: fl.some((f) => bull.has(f)) }, points: [{ timestamp: ts(m.time), value: low.get(ts(m.time)) }] });
+      });
+    }
+    if (layers.signals) {
+      const high = new Map(d.bars.map((b) => [ts(b.time), b.high]));
+      const low = new Map(d.bars.map((b) => [ts(b.time), b.low]));
+      const emaMap = new Map((d.lines?.ema20 ?? []).map((pt) => [ts(pt.time), pt.value]));
+      const n = d.bars.length;
+      const sigs = new Map<number, { text: string; side: "BUY" | "SELL"; isFollow: boolean }>();
+      let lastSide: "BUY" | "SELL" | null = null;
+
+      for (let i = 0; i < n; i++) {
+        const b = d.bars[i];
+        if (b.confirm === "confirmed" && i + 1 < n) {
+          const nextBar = d.bars[i + 1];
+          const t1 = ts(nextBar.time);
+          const c1 = nextBar.close;
+          const ema1 = emaMap.get(t1);
+
+          if (b.dir === "bull") {
+            // Trend-aligned Buy: Close >= EMA20 (or at support zone bounce)
+            const atSupport = d.zones?.some((z) => nextBar.low <= z.top * 1.005 && c1 >= z.bottom * 0.995);
+            const trendOk = !layers.antiWhipsaw || ema1 == null || c1 >= ema1 * 0.995 || atSupport;
+
+            if (trendOk && lastSide !== "BUY") {
+              sigs.set(t1, { text: "BUY", side: "BUY", isFollow: false });
+              lastSide = "BUY";
+
+              if (b.follow === "follow-through" && i + 2 < n) {
+                const follBar = d.bars[i + 2];
+                const t2 = ts(follBar.time);
+                const ema2 = emaMap.get(t2);
+                if (!layers.antiWhipsaw || ema2 == null || follBar.close >= ema2 * 0.995) {
+                  sigs.set(t2, { text: "BUY FT", side: "BUY", isFollow: true });
+                }
+              }
+            }
+          } else if (b.dir === "bear") {
+            // Trend-aligned Sell: Close <= EMA20 (or resistance rejection)
+            const atResistance = d.zones?.some((z) => nextBar.high >= z.bottom * 0.995 && c1 <= z.top * 1.005);
+            const trendOk = !layers.antiWhipsaw || ema1 == null || c1 <= ema1 * 1.005 || atResistance;
+
+            if (trendOk && lastSide !== "SELL") {
+              sigs.set(t1, { text: "SELL", side: "SELL", isFollow: false });
+              lastSide = "SELL";
+
+              if (b.follow === "follow-through" && i + 2 < n) {
+                const follBar = d.bars[i + 2];
+                const t2 = ts(follBar.time);
+                const ema2 = emaMap.get(t2);
+                if (!layers.antiWhipsaw || ema2 == null || follBar.close <= ema2 * 1.005) {
+                  sigs.set(t2, { text: "SELL FT", side: "SELL", isFollow: true });
+                }
+              }
+            }
+          }
+        }
+      }
+
+      sigs.forEach((s, t) => {
+        const isBuy = s.side === "BUY";
+        ov.push({
+          name: "d_signal",
+          groupId: "drishti",
+          lock: true,
+          extendData: s,
+          points: [{ timestamp: t, value: isBuy ? low.get(t) : high.get(t) }],
+        });
       });
     }
     if (ov.length) c.createOverlay(ov);
@@ -437,6 +505,13 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
           <label className="tog"><input type="checkbox" checked={layers.zones} onChange={(e) => setLayersP({ ...layers, zones: e.target.checked })} />S/R zones</label>
           <label className="tog">Candle patterns <select value={layers.patterns} onChange={(e) => setLayersP({ ...layers, patterns: e.target.value as Layers["patterns"] })}><option value="bullish">trigger flags</option><option value="all">all 26</option><option value="off">off</option></select></label>
           <label className="tog"><input type="checkbox" checked={layers.trend} onChange={(e) => setLayersP({ ...layers, trend: e.target.checked })} />Trend badges</label>
+          <label className="tog"><input type="checkbox" checked={layers.signals} onChange={(e) => setLayersP({ ...layers, signals: e.target.checked })} />Buy / Sell Signals (Confirmed &amp; Follow-Through)</label>
+          {layers.signals && (
+            <label className="tog" style={{ paddingLeft: 16, fontSize: 12 }}>
+              <input type="checkbox" checked={layers.antiWhipsaw} onChange={(e) => setLayersP({ ...layers, antiWhipsaw: e.target.checked })} />
+              Anti-Whipsaw Filter (EMA20 &amp; S/R Confluence)
+            </label>
+          )}
           <span className="muted small">Signals / entry / SL / target lines: later (with P3).</span>
           <button onClick={() => setMenu("")}>Close</button>
         </div>
@@ -526,9 +601,13 @@ function BarCard({ d, k, prev, when, x, width, live, inds, i }: {
         {pats.length > 0 && <tr><td>Patterns</td><td>{pats.join(", ")}</td></tr>}
         {dir !== "flat" && <>
           <tr><td title={dir === "bull" ? "next candle closed above this high" : "next candle closed below this low"}>Next candle</td>
-            <td style={{ color: tone(sb?.confirm) }}>{sb?.confirm ?? "pending"}</td></tr>
+            <td style={{ color: tone(sb?.confirm), fontWeight: sb?.confirm === "confirmed" ? 700 : 400 }}>
+              {sb?.confirm === "confirmed" ? `confirmed (${dir === "bull" ? "BUY" : "SELL"})` : (sb?.confirm ?? "pending")}
+            </td></tr>
           {(sb?.confirm === "confirmed") && <tr><td title="the candle after that closed further in the same direction">Candle after</td>
-            <td style={{ color: tone(sb?.follow) }}>{sb?.follow ?? "pending"}</td></tr>}
+            <td style={{ color: tone(sb?.follow), fontWeight: sb?.follow === "follow-through" ? 700 : 400 }}>
+              {sb?.follow === "follow-through" ? `follow-through (${dir === "bull" ? "BUY" : "SELL"})` : (sb?.follow ?? "pending")}
+            </td></tr>}
         </>}
       </tbody></table>
       <div className="muted small" style={{ marginTop: 4 }}>Next candle / candle after: what later candles did (hindsight). NOT a prediction; not used by drishti-swing-v1.</div>

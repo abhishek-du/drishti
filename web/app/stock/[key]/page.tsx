@@ -3,7 +3,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import type { BarsData, Tf } from "@/components/kchart/KChart";
-import { get } from "@/components/api";
+import { fmt, get } from "@/components/api";
 import { LIVE_LABEL } from "@/components/live";
 
 // klinecharts touches `window` when imported, so the chart loads in the browser only (no SSR)
@@ -55,18 +55,46 @@ export default function Stock() {
   return (
     <div className="stockpage">
       {/* Stock Header & Breadcrumb */}
-      <div className="row" style={{ marginBottom: 8, justifyContent: "space-between" }}>
-        <div className="row" style={{ gap: 12 }}>
+      <div className="row" style={{ marginBottom: 8, justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+        <div className="row" style={{ gap: 12, alignItems: "center" }}>
           <a href="/" className="nav-link" style={{ padding: "4px 8px", fontSize: 13 }}>
             ← Watchlist
           </a>
-          <h2 className="stock-title">{d?.symbol ?? k}</h2>
+          <h2 className="stock-title" style={{ margin: 0 }}>{d?.symbol ?? k}</h2>
           {d && (
             <span className="muted" style={{ fontSize: 14 }}>
               {d.name}{d.sector ? ` · ${d.sector}` : ""}
             </span>
           )}
         </div>
+
+        {d && (d.quote || d.last?.close) && (
+          <div className="row" style={{ gap: 10, alignItems: "center" }}>
+            <span style={{ fontSize: 22, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
+              ₹{fmt(d.quote?.ltp ?? d.last?.close)}
+            </span>
+            {d.quote && (
+              <span style={{
+                color: d.quote.net_change >= 0 ? "var(--up)" : "var(--down)",
+                fontWeight: 700,
+                fontSize: 14,
+                fontVariantNumeric: "tabular-nums"
+              }}>
+                {d.quote.net_change >= 0 ? "+" : ""}{fmt(d.quote.net_change)} ({d.quote.net_change >= 0 ? "+" : ""}{fmt(d.quote.pct_change)}%)
+              </span>
+            )}
+            {d.quote?.is_upper_circuit && (
+              <span className="pill on" style={{ fontSize: 11, padding: "2px 8px", fontWeight: 700 }}>
+                ⚡ Upper Circuit Limit (20%)
+              </span>
+            )}
+            {d.quote?.is_lower_circuit && (
+              <span className="pill off" style={{ fontSize: 11, padding: "2px 8px", fontWeight: 700 }}>
+                ⚠️ Lower Circuit Limit
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Multi-timeframe trend radar badges */}

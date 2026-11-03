@@ -72,6 +72,8 @@ def basic(df: pd.DataFrame, by: str | None = None) -> pd.DataFrame:
     out["hi52"] = roll(df.high, g, 250, "max")
     out["volr50"] = df.volume / roll(df.volume, g, 50, "mean")
     out["volr20"] = df.volume / roll(df.volume, g, 20, "mean")
+    out["volr20_max3"] = roll(out["volr20"], g, 3, "max")
+    out["prev_hi5"] = shift(roll(df.high, g, 5, "max"), g, 1)
     out["sma200_slope20"] = out.sma200 / shift(out.sma200, g, 20) - 1
     sig = roll(np.log(c) - np.log(shift(c, g)), g, 250, "std") * np.sqrt(250)
     for L, name in ((125, "mr6"), (250, "mr12")):
