@@ -25,6 +25,7 @@ from sqlalchemy import text
 
 from drishti.core import costs
 from drishti.core.clock import IST
+from drishti.data.holidays import SHORT_SESSIONS
 from drishti.replay import load
 from drishti.replay.run import calendar
 from drishti.strategies import orders
@@ -110,6 +111,144 @@ def c1(panel, bars, cal, n500: pd.Series, start, end, regime: bool, buffer: bool
                      "ew": float(np.mean(ew)) if ew else 0.0,
                      "n500": float(n_next / nr - 1) if nr and n_next else np.nan})
     return {"periods": pd.DataFrame(rows), "final": V}
+
+
+STCG, LTCG, LTCG_EXEMPT, CESS = 0.20, 0.125, 1_25_000.0, 0.04   # s.111A / s.112A, from 2024-07-23
+FUND_TER = 0.003
+
+
+def fy(d: _dt.date) -> int:
+    """Indian financial year (April-March), named by its starting year."""
+    return d.year if d.month >= 4 else d.year - 1
+
+
+def fy_tax(st: float, lt: float, cf: dict) -> float:
+    """Tax of one FY on net short- and long-term gains (EXPLORATORY estimate): a short-term loss
+    offsets LTCG; a long-term loss offsets only LTCG; unused losses carry forward in `cf`
+    (keys st, lt); 20 % STCG, 12.5 % LTCG above ₹1.25 lakh, + 4 % cess, no surcharge."""
+    if st < 0:
+        x = min(-st, max(lt, 0.0))
+        lt -= x
+        st += x
+        cf["st"] += -st
+        st = 0.0
+    if lt < 0:
+        cf["lt"] += -lt
+        lt = 0.0
+    u = min(cf["st"], st); st -= u; cf["st"] -= u          # noqa: E702
+    u = min(cf["st"], lt); lt -= u; cf["st"] -= u          # noqa: E702
+    u = min(cf["lt"], lt); lt -= u; cf["lt"] -= u          # noqa: E702
+    return (1 + CESS) * (STCG * st + LTCG * max(lt - LTCG_EXEMPT, 0.0))
+
+
+def c1_after_tax(panel, bars, cal, start, end, bps: float, pay_tax: bool = True) -> dict:
+    """C1a (top 30, monthly, no regime, no buffer) with FIFO lots and Indian capital-gains tax
+    paid at the first rebalance of each new FY, then a full sale at the last exit with sell
+    charges and the final FY's tax. Pre-tax it follows `c1` (same targets, charges and prices).
+    EXPLORATORY, information only."""
+    el = panel[panel.eligible & panel.rs_score.notna()]
+    rank = {d: g.sort_values("rs_score", ascending=False).instrument_key.tolist()
+            for d, g in el.groupby("session_date")}
+    op = bars.set_index(["instrument_key", "session_date"]).open
+    cl = bars.set_index(["instrument_key", "session_date"]).close.sort_index()
+    nxt = {d: cal[i + 1] for i, d in enumerate(cal[:-1])}
+    me = [d for d in month_ends(cal) if d in rank and d in nxt and start <= nxt[d] <= end]
+    periods = [(r, r2, nxt[r], nxt[r2]) for r, r2 in zip(me[:-1], me[1:])]
+
+    def px(k, d):
+        v = op.get((k, d))
+        if v is not None and np.isfinite(v):
+            return float(v)
+        try:
+            s = cl.loc[k].loc[:d]
+            return float(s.iloc[-1]) if len(s) else None
+        except KeyError:
+            return None
+
+    lots: dict[str, list] = {}               # k -> [[units, cost per unit, buy date], ...]
+    gains: dict[int, list] = {}              # fy -> [st, lt]
+    cf, paid, taxes, cur_fy = {"st": 0.0, "lt": 0.0}, set(), {}, None
+    last_px: dict[str, float] = {}
+
+    def value(d):
+        return sum(sum(u for u, _, _ in L) * (px(k, d) or last_px.get(k, 0.0))
+                   for k, L in lots.items())
+
+    def sell(k, units, p, d):
+        g = gains.setdefault(fy(d), [0.0, 0.0])
+        L = lots[k]
+        while units > 1e-12 and L:
+            u, c0, d0 = L[0]
+            x = min(u, units)
+            g[0 if (d - d0).days < 365 else 1] += x * (p - c0)
+            L[0][0] -= x
+            units -= x
+            if L[0][0] <= 1e-12:
+                L.pop(0)
+        if not L:
+            del lots[k]
+
+    V = CAPITAL
+    for r, r2, e0, e1 in periods:
+        V = value(e0) if lots else V
+        tax = 0.0
+        for y in sorted(gains):
+            if pay_tax and y < fy(e0) and y not in paid:
+                st_, lt_ = gains[y]
+                taxes[y] = fy_tax(st_, lt_, cf)
+                tax += taxes[y]
+                paid.add(y)
+        Va = V - tax
+        target = [k for k in rank[r][:TOP] if px(k, e0) is not None]
+        names = set(target) | set(lots)
+        cost = 0.0
+        cur = {k: sum(u for u, _, _ in lots.get(k, [])) * (px(k, e0) or 0.0) for k in names}
+        for k in names:
+            d = (Va / len(target) if k in target else 0.0) - cur[k]
+            if abs(d) < 1:
+                continue
+            leg = costs.buy(d) if d > 0 else costs.sell(-d, dp=True)
+            cost += leg.total + abs(d) * bps / 1e4
+        post = (Va - cost) / len(target)
+        for k in names:
+            p = px(k, e0)
+            have = sum(u for u, _, _ in lots.get(k, []))
+            want = post / p if k in target else 0.0
+            if want < have:
+                sell(k, have - want, p, e0)
+            elif want > have:
+                lots.setdefault(k, []).append([want - have, p, e0])
+            last_px[k] = p
+        for k in lots:
+            last_px[k] = px(k, e1) or last_px[k]
+    # final sale at the last exit open
+    end_d = periods[-1][3]
+    Vend = value(end_d)
+    sc = sum(costs.sell(sum(u for u, _, _ in L) * last_px[k], dp=True).total
+             + sum(u for u, _, _ in L) * last_px[k] * bps / 1e4 for k, L in lots.items())
+    for k in list(lots):
+        sell(k, sum(u for u, _, _ in lots[k]), last_px[k], end_d)
+    tax_end = 0.0
+    for y in sorted(gains):
+        if y not in paid:
+            taxes[y] = fy_tax(*gains[y], cf)
+            tax_end += taxes[y]
+    return {"book_final": Vend, "after_tax_final": Vend - sc - tax_end,
+            "tax_by_fy": {f"FY{y}-{(y + 1) % 100:02d}": t for y, t in taxes.items()},
+            "gains_by_fy": {f"FY{y}-{(y + 1) % 100:02d}": {"st": g[0], "lt": g[1]}
+                            for y, g in gains.items()},
+            "final_sell_charges": sc, "months": len(periods),
+            "start": str(periods[0][2]), "end": str(end_d)}
+
+
+def fund_after_tax(mom30: pd.Series, start_d: _dt.date, end_d: _dt.date) -> dict:
+    """An index fund on the Nifty200 Momentum 30 price index: monthly returns minus the TER,
+    tax only at the end (LTCG if held >= 12 months, else STCG)."""
+    v = CAPITAL * float((1 + mom30 - FUND_TER / 12).prod())
+    g = v - CAPITAL
+    lt = (end_d - start_d).days >= 365
+    t = fy_tax(0.0 if lt else g, g if lt else 0.0, {"st": 0.0, "lt": 0.0})
+    return {"pre_tax_final": v, "after_tax_final": v - t, "tax": t, "ltcg": lt}
 
 
 def _cagr(r: pd.Series) -> float:
@@ -371,9 +510,79 @@ async def run(rd: Path, window: str, only: set[str] | None) -> dict:
     return out
 
 
+async def c1a_holdout(rd: Path) -> dict:
+    """The ONE C1a holdout look (user override 2026-11-02, rule in VARIANTS.md): pass = C1a after
+    costs at 10 bps beats the Nifty200 Momentum 30 price index over 2025-01-01 -> C on the same
+    monthly periods. Tax and index-fund numbers are information only."""
+    out_dir = load.research_dir() / "sprint" / "c1a_holdout"
+    out_dir.mkdir(parents=True, exist_ok=False)               # one look only
+    man = json.loads((rd / "manifest.json").read_text())
+    cutoff, data_end = (_dt.date.fromisoformat(man[k]) for k in ("cutoff", "data_end"))
+    panel = pd.read_parquet(rd / "panel.parquet")
+    panel["session_date"] = pd.to_datetime(panel.session_date).dt.date
+    panel = panel[panel.session_date <= cutoff]
+    inp = await load.cached(data_end)
+    bars = inp["bars"].sort_values(["instrument_key", "session_date"])
+    cal = calendar(bars)
+    from drishti.core.db import sessionmaker
+    from drishti.features.indicators import regime
+    async with sessionmaker()() as s:
+        rows = (await s.execute(text("""select session_date, close from index_bar
+            where index_key = 'NSE_INDEX|Nifty200Momentm30' and source = 'UPSTOX_HIST'
+              and session_date <= :d order by fetched_at"""), {"d": data_end})).all()
+    m30 = pd.DataFrame(rows, columns=["d", "c"]).drop_duplicates("d", keep="last")
+    m30 = m30[~m30.d.isin(SHORT_SESSIONS)].set_index("d").c.astype(float).sort_index()
+    n500 = regime(inp["index"]).n500
+    at = lambda s_, d: float(s_[s_.index <= d].iloc[-1])  # noqa: E731
+    res = {str(b): c1(panel, bars, cal, n500, HOLDOUT_START, data_end, False, False, b)
+           for b in BPS}
+    p = res["10"]["periods"].copy()
+    pos = {d: i for i, d in enumerate(cal)}
+    p["r2"] = [cal[pos[e] - 1] for e in p.exit]
+    p["mom30"] = [at(m30, b) / at(m30, a) - 1 for a, b in zip(p.rebalance, p.r2)]
+    p["fund"] = p.mom30 - FUND_TER / 12
+
+    def stats(r):
+        return {"total": float((1 + r).prod() - 1), "cagr": _cagr(r),
+                "vol": float(r.std() * math.sqrt(12)), "max_dd": _mdd(r),
+                "worst_month": float(r.min()),
+                "by_year": {int(y): {"months": int(len(g)), "ret": float((1 + g).prod() - 1)}
+                            for y, g in r.groupby(p.year)}}
+
+    c1a, idx = stats(p.net), stats(p.mom30)
+    tax = c1_after_tax(panel, bars, cal, HOLDOUT_START, data_end, 10)
+    fund = fund_after_tax(p.mom30, p.rebalance.iloc[0], p.r2.iloc[-1])
+    yrs = len(p) / 12
+    out = {"label": LABEL + "; HOLDOUT, the one approved look (user 2026-11-02)",
+           "replay": man["run_id"], "cutoff": str(cutoff), "data_end": str(data_end),
+           "months": int(len(p)), "first_entry": str(p.entry.iloc[0]),
+           "last_exit": str(p.exit.iloc[-1]),
+           "PASS": bool(c1a["total"] > idx["total"]),
+           "c1a_net_10": c1a, "mom30_index": idx,
+           "c1a_by_bps_total": {b: float((1 + r["periods"].net).prod() - 1)
+                                for b, r in res.items()},
+           "c1a_turnover_month": float(p.turnover.mean()),
+           "c1a_cost_drag_year": float(p.cost_frac.sum() / yrs),
+           "monthly_corr": float(p.net.corr(p.mom30)),
+           "tracking_error": float((p.net - p.mom30).std() * math.sqrt(12)),
+           "info_after_tax": {
+               "c1a": tax | {"after_tax_cagr": (tax["after_tax_final"] / CAPITAL) ** (1 / yrs) - 1},
+               "fund": fund | {"after_tax_cagr": (fund["after_tax_final"] / CAPITAL) ** (1 / yrs) - 1},
+               "c1a_no_tax_check_vs_c1": float(c1_after_tax(
+                   panel, bars, cal, HOLDOUT_START, data_end, 10, pay_tax=False)["book_final"]
+                   / res["10"]["final"] - 1),
+               "rates": "STCG 20 % (<12 m), LTCG 12.5 % above ₹1.25 lakh per FY, + 4 % cess, "
+                        "no surcharge; fund TER 0.3 %/yr, price index (no dividends)"}}
+    (out_dir / "c1a_holdout.json").write_text(json.dumps(out, indent=1, default=str))
+    p.to_csv(out_dir / "c1a_holdout_monthly.csv", index=False)
+    return out
+
+
 def main(args: list[str]) -> dict:
     opt = lambda k, d=None: args[args.index(k) + 1] if k in args else d  # noqa: E731
     rd, window = Path(opt("--replay")), opt("--window", "dev")
+    if "--c1a-holdout" in args:
+        return asyncio.run(c1a_holdout(rd))
     only = set(opt("--only").split(",")) if opt("--only") else None
     if window == "holdout":
         assert only and len(only) <= 2, "the holdout runs once, for at most 2 finalists"

@@ -282,6 +282,28 @@ web/ (Next.js + lightweight-charts)   ops/ (runbooks + systemd user units)   doc
 - A research sprint, the user's call on scope, ends in either a documented v2 (its own spec, pre-registration and freeze) or no forward test.
 - The forward-start date below is void until then.
 
+## Hammer / candle-entry family CLOSED (user confirmed 2026-11-02)
+
+**What was tried** (Track B, merged at `d4d1251`; outputs in `/windows/drishti_data/research/track-b/sprint/`; all SURVIVORSHIP-BIASED, EXPLORATORY):
+- **RJ1–RJ6:** the Rajat hammer + volume setup on daily and 15m bars.
+- **RJ7–RJ9:** a 15m minimum reward:risk test, at 1:1 and 1:1.5.
+- **SW-a…SW-d:** exits on the hammer entry:
+  - level-aware partial exit + breakeven trail;
+  - an obstruction filter + 2R;
+  - an ATR triple barrier;
+  - stop + trail after +1R.
+
+**Result:** every variant failed the pass rule against same-exit placebos. SW-c was +0.08 R vs placebo on only 38 trades; that meets the +0.05 margin numerically but is not significant.
+
+**Decision:** the family is closed, together with v1. It is not re-opened under a new name.
+
+**Trial count and gate:** `TRIAL_LEDGER.md` (research folder) counts **27 rule sets, or 30 counting the model grid**. **Any future candidate must clear the deflated Sharpe ratio and the SPA test at N ≈ 30** (plus every later trial) against a same-exit placebo before any forward test.
+
+**Also recorded in the ledger:**
+- C1a (monthly momentum book) had a one-time holdout run by user override on 2026-11-02: PASS vs the Nifty200 Momentum 30 price index after costs, by +1.6 pp.
+- **This is the holdout window that had already been used once** (C3b). Treat it as supporting evidence only, not as a clean out-of-sample test. A C1a forward test, if wanted, needs the user's decision and its own pre-registration.
+- Descriptive NSE level base rates (swing high, previous-day high, opening-range high, high of day) are in `research/track-b/sprint/baserates/`.
+
 ## Research sprint result (user, 2026-10-29): no v2 frozen, forward test stays ON HOLD
 
 **The sprint** is Track B's, merged as code at `7aaa614`. Its outputs stay as files in `/windows/drishti_data/research/track-b/sprint/`, and the variant log `VARIANTS.md` was written before each run. All of it is **SURVIVORSHIP-BIASED, EXPLORATORY**.
