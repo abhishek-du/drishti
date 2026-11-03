@@ -1,6 +1,6 @@
 # Drishti handover (read this first)
 
-**Last updated:** 2026-11-02 20:30 IST, by Claude Code (Track A, the main session). Updated every evening.
+**Last updated:** 2026-11-03 13:00 IST, by Claude Code (Track A, the main session). Updated every evening.
 
 **Live status** (runs, freshness, git, cron) is written automatically every night at 21:45 to `/windows/drishti_data/handover/STATUS.md` (`p1 status`). Read that too: it is newer than this file.
 
@@ -29,6 +29,7 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 | Research sprint | DONE | No v2 frozen; C3b failed its holdout |
 | P6 / forward test | **ON HOLD** | v1 is not taken forward; waits for the user's v2 decision |
 | **P1c (Option B prep)** | IN PROGRESS | Done: guarded login (off until the switch), master + F&O flag, board-meetings CSV loader, official 1d ingest (nightly), compare1d, corporate actions + factors. Pending: section 4 |
+| **Scanner + journal** | BACKEND DONE 2026-11-03 | Decision support only (NOT validated edges, PAPER ONLY): `scan-v1` detectors, alerts + triple-barrier grades vs placebo, journal API. UI = Track C task. DESIGN "Decision-support scanner", DEVIATIONS D4 |
 | Switch to B | PLANNED | Fri 2026-11-20 evening (`SWITCH_TO_B.md` 6.2) |
 
 ## 3. Key research results (all SURVIVORSHIP-BIASED, EXPLORATORY)
@@ -78,7 +79,8 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **The v2 research direction.** v1 is on hold; any new candidate needs a new untouched window, i.e. forward data.
 - **The second archive location** (external disk ≥ 128 GB or an rclone crypt remote). Needed before 11-20.
 - **Tick retention** (30 days now). The measured cost is ~0.03 GB/day for ~50 keys and ~0.15 GB/day for 300 keys, so 60+ days is affordable.
-- **Cron lines not yet installed** (`ops/cron.txt`): `news` every 30 min. The crontab has 13 Drishti lines now; with `news` it becomes 14.
+- **Cron lines not yet installed** (`ops/cron.txt`): `news` every 30 min, and the 3 scanner lines (`scan_eod` 19:45, `scan_intraday` every 15 min, `scan_grade` 09:45). The crontab has 13 Drishti lines now; with all four it becomes 17.
+- **Telegram for the scanner:** optional; set `DRISHTI_TELEGRAM_BOT_TOKEN` and `DRISHTI_TELEGRAM_CHAT_ID` in `backend/.env` (otherwise the alert list is only logged).
 
 ## 6. Hard rules (summary; the full text is in `CLAUDE.md`)
 

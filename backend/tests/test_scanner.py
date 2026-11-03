@@ -1,0 +1,193 @@
+"""Scanner + journal (decision support, PAPER ONLY): detectors, levels, sizing, grading, 15m
+aggregation, notify fallback, journal API on drishti_test."""
+
+import asyncio
+import datetime as _dt
+import json
+
+import numpy as np
+import pandas as pd
+import pytest
+from sqlalchemy import text
+
+from drishti.scanner import detect, grade, notify
+from drishti.scanner.run import agg15
+
+
+def _trend(n=300, seed=1):
+    rng = np.random.default_rng(seed)
+    c = 100 * np.exp(np.cumsum(0.002 + 0.01 * rng.standard_normal(n)))
+    o = np.r_[c[0], c[:-1]]
+    h = np.maximum(o, c) * 1.006
+    lo = np.minimum(o, c) * 0.994
+    return pd.DataFrame({"open": o, "high": h, "low": lo, "close": c,
+                         "volume": rng.integers(1e5, 2e5, n).astype(float)})
+
+
+def test_breakout_52w_fires_once_with_levels_and_size():
+    b = _trend()
+    prior = b.high.iloc[-251:-1].max()
+    b.loc[len(b) - 2, ["close", "high"]] = [prior * 0.98, prior * 0.985]   # t-1 below
+    b.loc[len(b) - 1, ["open", "close", "high", "low"]] = [prior * 0.99, prior * 1.02,
+                                                           prior * 1.025, prior * 0.985]
+    hs = {h["detector"]: h for h in detect.hits(detect.prepare(b))}
+    assert "BREAKOUT_52W" in hs
+    h = hs["BREAKOUT_52W"]
+    assert h["entry_ref"] == pytest.approx(prior * 1.025 * 1.0005)
+    assert h["stop"] <= h["entry_ref"] - h["atr"] + 1e-9          # >= 1 ATR wide
+    assert h["r1"] is None or h["r1"] > h["entry_ref"]
+    z = detect.size(h, 1_000_000, 1.0)
+    risk = z["entry_ref"] - z["stop"]
+    assert z["qty"] * risk <= 10_000 + 1e-6 and (z["qty"] + 1) * risk > 10_000
+    assert z["cost_r"] > 0
+
+
+def test_hammer_confirm_and_no_hit_on_short_history():
+    b = _trend(120, 3)
+    t = len(b) - 1
+    c = b.close.iloc[t - 6]
+    for i, k in enumerate((t - 5, t - 4, t - 3, t - 2)):           # 4 lower closes first
+        x = c * (1 - 0.01 * (i + 1))
+        b.loc[k, ["open", "high", "low", "close"]] = [x * 1.005, x * 1.008, x * 0.997, x]
+    c = b.close.iloc[t - 2]
+    # a hammer on t-1 (long lower wick, small body near the high), then t closes above its high
+    b.loc[t - 1, ["open", "high", "low", "close"]] = [c, c * 1.0015, c * 0.96, c * 1.001]
+    b.loc[t, ["open", "high", "low", "close"]] = [c * 1.001, c * 1.02, c * 0.999, c * 1.015]
+    df = detect.prepare(b)
+    assert bool(df.hammer.iloc[t - 1])
+    names = [h["detector"] for h in detect.hits(df)]
+    assert "HAMMER_CONFIRM" in names
+    h = [h for h in detect.hits(df) if h["detector"] == "HAMMER_CONFIRM"][0]
+    assert h["stop"] < c * 0.96                                      # below the hammer low
+    assert detect.hits(detect.prepare(b.iloc[-50:])) == []
+
+
+def test_levels_r1_r2_are_the_next_zones_above_entry():
+    zs = [{"bottom": 90, "top": 91, "price": 90.5, "touches": 3},
+          {"bottom": 110, "top": 111, "price": 110.5, "touches": 2},
+          {"bottom": 120, "top": 121, "price": 120.5, "touches": 2}]
+    h = detect.levels_for("X", 100.0, 97.0, 2.0, zs)
+    assert (h["r1"], h["r2"]) == (110, 120)
+    assert h["stop"] == pytest.approx(min(97 - 0.2, 100.05 - 2))
+    assert h["rr_r1"] == pytest.approx((110 - 100.05) / (100.05 - h["stop"]))
+
+
+A = {"id": 7, "tf": "1d", "entry_ref": 100.0, "stop": 95.0, "r1": 110.0, "qty": 2000}
+
+
+def _bars(rows):
+    a = np.array(rows, float)
+    return a[:, 0], a[:, 1], a[:, 2], a[:, 3]
+
+
+def test_grade_alert_bases():
+    # no fill: next bar never trades through the entry
+    assert grade.grade(A, *_bars([[98, 99.9, 97, 99]]), "alert")["outcome"] == "NO_FILL"
+    # fill then target
+    r = grade.grade(A, *_bars([[99, 101, 98, 100], [100, 111, 99, 110]]), "alert")
+    assert r["outcome"] == "R1" and r["entry_used"] == 100 and r["r_gross"] == pytest.approx(2)
+    assert r["r_net"] < r["r_gross"]
+    # gap above the entry fills at the open; stop first when both are hit in one bar
+    r = grade.grade(A, *_bars([[102, 103, 101, 102], [101, 112, 94, 100]]), "alert")
+    assert r["entry_used"] == 102 and r["outcome"] == "STOP"
+    # timeout after 5 sessions at the close; fewer bars = OPEN
+    flat = [[100, 101, 99, 100.5]] * 5
+    assert grade.grade(A, *_bars(flat), "alert")["outcome"] == "TIMEOUT"
+    assert grade.grade(A, *_bars(flat[:3]), "alert")["outcome"] == "OPEN"
+    # took uses the user's entry; placebo is seeded and inside bar 0's range
+    r = grade.grade(A, *_bars([[99, 101, 98, 100], [100, 111, 99, 110]]), "took", 99.5)
+    assert r["entry_used"] == 99.5 and r["outcome"] == "R1"
+    p1 = grade.grade(A, *_bars([[99, 101, 98, 100], [100, 111, 99, 110]]), "placebo")
+    p2 = grade.grade(A, *_bars([[99, 101, 98, 100], [100, 111, 99, 110]]), "placebo")
+    assert p1 == p2 and 98 <= p1["entry_used"] <= 101 and p1["seed"] == grade.SEED + 7
+
+
+def test_agg15_buckets_from_0915_ist():
+    t0 = pd.Timestamp("2026-11-03 09:15", tz="Asia/Kolkata").tz_convert("UTC")
+    m = pd.DataFrame({"instrument_key": "K", "t": [t0 + pd.Timedelta(minutes=i) for i in range(31)],
+                      "open": np.arange(31.0), "high": np.arange(31.0) + 1,
+                      "low": np.arange(31.0) - 1, "close": np.arange(31.0) + 0.5,
+                      "volume": 1.0})
+    b = agg15(m)
+    assert len(b) == 3 and list(b.t) == [t0, t0 + pd.Timedelta(minutes=15),
+                                         t0 + pd.Timedelta(minutes=30)]
+    first = b.iloc[0]
+    assert (first.open, first.high, first.low, first.close, first.volume) == (0, 15, -1, 14.5, 15)
+
+
+def test_notify_logs_without_telegram_key(monkeypatch):
+    from drishti.core import config
+    msg = notify.message("EOD scan", [{"symbol": "ABC", "instrument_key": "K", "detector": "X",
+                                       "tf": "1d", "entry_ref": 10, "stop": 9, "r1": None,
+                                       "rr_r1": None, "qty": 5}])
+    assert detect.LABEL in msg and "ABC X [1d]" in msg
+    monkeypatch.setenv("DRISHTI_TELEGRAM_BOT_TOKEN", "")
+    config.get_settings.cache_clear()
+
+    class S:
+        async def execute(self, *a, **k):
+            class R:
+                def mappings(self):
+                    return [{"symbol": "ABC", "instrument_key": "K", "detector": "X", "tf": "1d",
+                             "entry_ref": 10, "stop": 9, "r1": 12, "rr_r1": 2, "qty": 5}]
+            return R()
+    try:
+        assert asyncio.run(notify.alerts(S(), [1], "t")) == "not configured (logged)"
+    finally:
+        config.get_settings.cache_clear()
+
+
+def test_journal_api_and_stats_on_test_db():
+    from fastapi import HTTPException
+
+    from drishti.api import scan_api
+    from drishti.core import db
+
+    async def go():
+        try:
+            async with db.sessionmaker()() as s:
+                rid = (await s.execute(text("""insert into run(run_id, kind, code_sha, params)
+                    values (gen_random_uuid(), 'TEST_SCAN', 'test', '{}') returning run_id"""))
+                ).scalar()
+                bt = _dt.datetime.now(_dt.timezone.utc)
+                aid = (await s.execute(text("""insert into scan_alert(run_id, session_date, tf,
+                    bar_time, instrument_key, symbol, detector, version, entry_ref, stop, r1, r2,
+                    rr_r1, qty, capital, risk_pct, cost_r, atr, context) values (:r, :d, '1d',
+                    :bt, 'NSE_EQ|TESTSCAN', 'TST', 'BREAKOUT_52W', 'scan-v1', 100, 95, 110, 120,
+                    2, 2000, 1000000, 1, 0.05, 4, '{}') returning id"""),
+                    {"r": rid, "d": bt.date(), "bt": bt})).scalar()
+                for basis, out, rn in (("alert", "R1", 1.9), ("placebo", "STOP", -1.05),
+                                       ("took", "R1", 2.0)):
+                    await s.execute(text("""insert into journal_outcome(alert_id, run_id, basis,
+                        outcome, entry_used, r_gross, r_net, bars_used) values
+                        (:a, :r, :b, :o, 100, :rn, :rn, 2)"""),
+                        {"a": aid, "r": rid, "b": basis, "o": out, "rn": rn})
+                await s.commit()
+                with pytest.raises(Exception):     # outcomes are append-only
+                    await s.execute(text("update journal_outcome set r_net = 0 where alert_id = :a"),
+                                    {"a": aid})
+                await s.rollback()
+            with pytest.raises(HTTPException):
+                await scan_api.journal(aid, scan_api.JournalIn(status="took"))   # needs entry
+            with pytest.raises(HTTPException):
+                await scan_api.journal(aid, scan_api.JournalIn(actual_entry=90))  # below stop
+            r = await scan_api.journal(aid, scan_api.JournalIn(status="took", actual_entry=100.2,
+                                                               actual_qty=1500))
+            assert r["journal"]["status"] == "took"
+            r = await scan_api.journal(aid, scan_api.JournalIn(notes="clean breakout"))
+            assert r["journal"]["actual_entry"] == 100.2 and r["journal"]["notes"]
+            d = await scan_api.alert(aid)
+            assert d["label"] == detect.LABEL and len(d["journal_history"]) == 2
+            assert set(d["grades"]) == {"alert", "placebo", "took"}
+            assert d["alert"]["risk_rupees"] == 10000
+            lst = await scan_api.alerts(date=bt.date())
+            assert any(a["id"] == aid and a["status"] == "took" for a in lst["alerts"])
+            st = await scan_api.stats(since=bt.date(), until=bt.date())
+            b = st["by_detector"]["BREAKOUT_52W"]
+            assert b["took"]["closed"] >= 1 and b["placebo"]["closed"] >= 1
+            assert json.dumps(st)
+        finally:
+            await db.engine().dispose()
+            db.engine.cache_clear()
+
+    asyncio.run(go())

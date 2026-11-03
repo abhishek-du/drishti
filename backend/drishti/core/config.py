@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     DRISHTI_UPSTOX_PIN: str = ""
     DRISHTI_UPSTOX_TOTP_SECRET: str = ""
     DRISHTI_UPSTOX_LOGIN_ENABLED: bool = False
+    # Decision-support scanner (user 2026-11-03): position size at RISK_PCT of CAPITAL. Paper only.
+    DRISHTI_SCAN_CAPITAL: float = 1_000_000.0
+    DRISHTI_SCAN_RISK_PCT: float = 1.0
+    # Telegram (optional): without both, notifications are only logged. Never printed.
+    DRISHTI_TELEGRAM_BOT_TOKEN: str = ""
+    DRISHTI_TELEGRAM_CHAT_ID: str = ""
 
 
 OWN_TOKEN_FILE = BACKEND / "var" / "upstox_token.json"
