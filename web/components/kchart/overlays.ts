@@ -132,11 +132,40 @@ const signal: OverlayTemplate = {
   },
 };
 
+// scanner alert level: a full-width line with its label at the right edge
+// (extendData = {label, color, dashed})
+const level: OverlayTemplate = {
+  name: "d_level", totalStep: 2, lock: true, needDefaultPointFigure: false,
+  createPointFigures: ({ coordinates, bounding, overlay }) => {
+    const e = (overlay.extendData ?? {}) as { label?: string; color?: string; dashed?: boolean };
+    const y = coordinates[0].y, color = e.color ?? "#3a86ff";
+    return [
+      { type: "line", ignoreEvent: true, attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] },
+        styles: { style: e.dashed ? "dashed" : "solid", size: 1.5, color, dashedValue: [6, 4] } },
+      { type: "text", ignoreEvent: true, attrs: { x: bounding.width - 6, y: y - 2, text: e.label ?? "", align: "right", baseline: "bottom" },
+        styles: { color: "#fff", backgroundColor: color, size: 11, paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1, borderRadius: 2 } },
+    ];
+  },
+};
+
+// scanner alert bar marker: a ▼ above the bar's high (point = the bar's high)
+const mark: OverlayTemplate = {
+  name: "d_mark", totalStep: 2, lock: true, needDefaultPointFigure: false,
+  createPointFigures: ({ coordinates, overlay }) => {
+    const { x, y } = coordinates[0];
+    return [
+      { type: "polygon", ignoreEvent: true, attrs: { coordinates: [{ x, y: y - 6 }, { x: x - 6, y: y - 16 }, { x: x + 6, y: y - 16 }] }, styles: { style: "fill", color: "#f59f00" } },
+      { type: "text", ignoreEvent: true, attrs: { x, y: y - 18, text: String(overlay.extendData ?? "alert"), align: "center", baseline: "bottom" },
+        styles: { color: "#f59f00", backgroundColor: "transparent", size: 11, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } },
+    ];
+  },
+};
+
 let registered = false;
 export function registerOverlays() {
   if (registered) return;
   registered = true;
-  [rect, measure, note, zones, pattern, signal].forEach((o) => registerOverlay(o));
+  [rect, measure, note, zones, pattern, signal, level, mark].forEach((o) => registerOverlay(o));
 }
 
 // --- user drawings: saved per stock and timeframe in this browser (no DB writes) -------------

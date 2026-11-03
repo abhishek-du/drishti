@@ -42,8 +42,11 @@ function ls<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); re
 function lsSet(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked */ } }
 const qs = (o: Record<string, string | number | boolean>) => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&");
 
-export default function KChart({ instrumentKey, tf, setTf, onData }: {
-  instrumentKey: string; tf: Tf; setTf: (t: Tf) => void; onData: (d: BarsData | null) => void;
+/** Scanner alert levels drawn on the chart (entry blue, stop red, R1/R2 green dashed, marker on bar_time). */
+export type AlertLevels = { entry: number; stop: number; r1: number | null; r2: number | null; barTime: string; tf: "1d" | "15m" };
+
+export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
+  instrumentKey: string; tf: Tf; setTf: (t: Tf) => void; onData: (d: BarsData | null) => void; levels?: AlertLevels;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -79,8 +82,10 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   useEffect(() => {
     setCtype(ls(LS.ctype, "candle_solid")); setScale(ls(LS.scale, "normal")); setInds(ls(LS.ind, DEFAULT_SET));
     setLayers({ zones: true, patterns: "bullish", trend: true, signals: true, antiWhipsaw: true, ...ls(LS.layers, {}) }); setMagnet(ls(LS.magnet, "weak_magnet"));
-    const savedTheme = ls<"light" | "dark" | null>(LS.theme, null);
-    setTheme(savedTheme || "dark");
+    // the theme key is shared with ThemeToggle, which stores the plain string (not JSON)
+    let savedTheme: string | null = null;
+    try { savedTheme = localStorage.getItem(LS.theme)?.replace(/"/g, "") ?? null; } catch { /* storage blocked */ }
+    setTheme(savedTheme === "light" ? "light" : "dark");
     setReady(true);
   }, []);
   useEffect(() => { if (ready) document.documentElement.setAttribute("data-theme", theme); }, [theme, ready]);
@@ -169,6 +174,25 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
     c.setPeriod(d.tf === "1d" ? { type: "day", span: 1 } : d.tf === "1h" ? { type: "hour", span: 1 } : { type: "minute", span: parseInt(d.tf) });
     c.resetData();
   }, [d]);
+
+  // scanner alert levels (only when a page passes them)
+  useEffect(() => {
+    const c = chart.current;
+    if (!c || !d || !bars.current.length) return;
+    c.removeOverlay({ groupId: "alert" });
+    if (!levels) return;
+    const t1 = bars.current[bars.current.length - 1].timestamp;
+    const line = (value: number, label: string, color: string, dashed: boolean) => ({ name: "d_level", groupId: "alert", lock: true,
+      extendData: { label: `${label} ${value.toFixed(2)}`, color, dashed }, points: [{ timestamp: t1, value }] }) as OverlayCreate;
+    const ov: OverlayCreate[] = [line(levels.entry, "Entry", "#3a86ff", false), line(levels.stop, "Stop", "#e03131", false)];
+    if (levels.r1 !== null) ov.push(line(levels.r1, "R1", "#2f9e44", true));
+    if (levels.r2 !== null) ov.push(line(levels.r2, "R2", "#2f9e44", true));
+    // the alert bar: 1d bars are keyed by the IST date, intraday bars by their start time
+    const at = levels.tf === "1d" ? ts(new Date(levels.barTime).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })) : Date.parse(levels.barTime);
+    const bar = bars.current.find((k) => k.timestamp === at);
+    if (bar && (levels.tf === d.tf)) ov.push({ name: "d_mark", groupId: "alert", lock: true, extendData: "alert", points: [{ timestamp: at, value: bar.high }] } as OverlayCreate);
+    c.createOverlay(ov);
+  }, [d, levels]);
 
   // Drishti layers
   useEffect(() => {
@@ -462,7 +486,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const setLayersP = (l: Layers) => { setLayers(l); lsSet(LS.layers, l); };
   const setThemeP = (t: "light" | "dark") => {
     setTheme(t);
-    lsSet(LS.theme, t);
+    try { localStorage.setItem(LS.theme, t); } catch { /* storage blocked */ }   // plain string, as ThemeToggle
     document.documentElement.setAttribute("data-theme", t);
     window.dispatchEvent(new CustomEvent("drishti:theme", { detail: t }));
   };

@@ -10,8 +10,9 @@ export default function ThemeToggle() {
 
   useEffect(() => {
     setMounted(true);
-    const saved = localStorage.getItem(THEME_KEY) as "dark" | "light" | null;
-    const initial = saved || "dark";
+    // plain string; an older chart build stored it JSON-quoted
+    const saved = localStorage.getItem(THEME_KEY)?.replace(/"/g, "");
+    const initial = saved === "light" ? "light" : "dark";
     setTheme(initial);
     document.documentElement.setAttribute("data-theme", initial);
   }, []);
