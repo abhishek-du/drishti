@@ -50,7 +50,7 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 
 1. **P1c remaining** (target: complete 11-12, then shadow sessions 11-12 … 11-19):
    1. ~~Upstox `/v2/news` ingest~~ DONE 2026-11-02 (migration 0007, `p1 news`). The first live run had 120 requests, 0 errors, 173 articles. Versus Prajna over 6 days: 133 common, 60 only in Prajna, because the vendor drops older articles of busy stocks before 7 days and Prajna polls every 30 min. Fix: the 30-min cron (`ops/cron.txt`); the pre-switch gap is filled by the D1 copy.
-   2. Nightly intraday for the top 500 (1m/15m/1h → Parquet), plus the 1m gap 2026-04-29 → 07-17 after the switch (D3; ~0.5 GB).
+   2. ~~Nightly intraday for the top 500~~ BUILT 2026-11-03 (`p1 intraday`, `drishti/data/intraday.py`; files in `/windows/drishti_data/intraday/`, overlap check vs Prajna in the run counts). Cron `0 1 * * 2-6` pending user install. First real run = the first night after install. The 1m gap 2026-04-29 → 07-17 stays for after the switch (D3; ~0.5 GB).
    3. ~~The D1 copy tool~~ BUILT 2026-11-03 (`drishti/switch/d1copy.py`; `plan` / `copy [--delta]`). Dry run into `drishti_test` for 2026-09: 63/63 tables and 1d/1h/15m/1m bars all equal (count, OHLCV sums, md5 hash); delta path OK. 23 min for 28 M rows (1m 243 MB/month). Full copy #1 into `drishti` (after a backup) is planned for 11-11 night: ~230 M rows, ~3 h, ~3 GB on /windows (`/windows/drishti_data/prajna_copy/`). The dry-run output in `/windows/drishti_data/prajna_copy_dryrun/` can be deleted after that.
    4. Re-point Drishti's reads (`bars.py`, `bar_check`, `eod_quotes.universe_keys`, `run/p2.py`, the API) from Prajna's live DB to Drishti's tables, behind a flag.
    5. Vendor-applied detection for older CAs, once the copy brings Prajna's bars and observations.
@@ -80,7 +80,7 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **The v2 research direction.** v1 is on hold; any new candidate needs a new untouched window, i.e. forward data.
 - **The second archive location** (external disk ≥ 128 GB or an rclone crypt remote). Needed before 11-20.
 - **Tick retention** (30 days now). The measured cost is ~0.03 GB/day for ~50 keys and ~0.15 GB/day for 300 keys, so 60+ days is affordable.
-- **Cron lines not yet installed** (`ops/cron.txt`): `news` every 30 min, and the 3 scanner lines (`scan_eod` 19:45, `scan_intraday` every 15 min, `scan_grade` 09:45). The crontab has 13 Drishti lines now; with all four it becomes 17.
+- **Cron lines not yet installed** (`ops/cron.txt`): `news` every 30 min, and the 3 scanner lines (`scan_eod` 19:45, `scan_intraday` every 15 min, `scan_grade` 09:45). The crontab has 13 Drishti lines now; with all four it becomes 17, and 18 with `intraday` (01:00).
 - **Telegram for the scanner:** optional; set `DRISHTI_TELEGRAM_BOT_TOKEN` and `DRISHTI_TELEGRAM_CHAT_ID` in `backend/.env` (otherwise the alert list is only logged).
 
 ## 6. Hard rules (summary; the full text is in `CLAUDE.md`)

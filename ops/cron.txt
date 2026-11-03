@@ -32,3 +32,6 @@
 45 19 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scan_eod
 1,16,31,46 9-15 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scan_intraday
 45 9 * * 2-6   /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scan_grade
+# Nightly intraday (P1c, D3): 1m/15m/1h of the previous session for the top 500 + 21 indices
+# (~1,570 historical requests at fraction 0.5, after daily1d; files only, ~2 MB/night) + overlap check vs Prajna
+0 1 * * 2-6    /home/cis/windows/drishti/ops/runbooks/drishti_job.sh intraday

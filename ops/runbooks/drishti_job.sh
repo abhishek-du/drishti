@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Drishti job wrapper for cron: one job at a time per name, a log line at start and end.
-#   ops/runbooks/drishti_job.sh holidays|indices|manual|eod|barcheck|scout|master|daily1d|compare1d|live
+#   ops/runbooks/drishti_job.sh holidays|indices|manual|eod|barcheck|scout|master|daily1d|compare1d|intraday|live
 #   ops/runbooks/drishti_job.sh scan_eod|scan_intraday|scan_grade   (decision-support scanner)
 # live: started every 5 min in market hours; a running recorder or a run outside its window
 # (09:21/09:15-15:35) is skipped silently, so cron restarts it within 5 min after a crash.
