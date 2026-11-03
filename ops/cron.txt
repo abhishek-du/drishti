@@ -25,3 +25,13 @@
 # The vendor keeps only the newest articles per stock (busy names drop out before 7 days), so
 # frequent polling is what keeps coverage complete.
 */30 8-22 * * *  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh news
+# Decision-support scanner (user 2026-11-03; NOT validated edges, PAPER ONLY, separate from v1):
+# EOD scan of the eligible top 500 after Scout; 15m scan of the watchlist on each closed bar
+# (09:31-15:31; runs outside 09:30-15:35 or on holidays skip silently); grading every morning
+# after Prajna's official 1d of T-1 lands (moves after daily1d at the switch).
+45 19 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scan_eod
+1,16,31,46 9-15 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scan_intraday
+45 9 * * 2-6   /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scan_grade
+# Nightly intraday (P1c, D3): 1m/15m/1h of the previous session for the top 500 + 21 indices
+# (~1,570 historical requests at fraction 0.5, after daily1d; files only, ~2 MB/night) + overlap check vs Prajna
+0 1 * * 2-6    /home/cis/windows/drishti/ops/runbooks/drishti_job.sh intraday

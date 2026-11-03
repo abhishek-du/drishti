@@ -1,6 +1,6 @@
 # Drishti handover (read this first)
 
-**Last updated:** 2026-11-02 20:30 IST, by Claude Code (Track A, the main session). Updated every evening.
+**Last updated:** 2026-11-03 13:00 IST, by Claude Code (Track A, the main session). Updated every evening.
 
 **Live status** (runs, freshness, git, cron) is written automatically every night at 21:45 to `/windows/drishti_data/handover/STATUS.md` (`p1 status`). Read that too: it is newer than this file.
 
@@ -29,6 +29,7 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 | Research sprint | DONE | No v2 frozen; C3b failed its holdout |
 | P6 / forward test | **ON HOLD** | v1 is not taken forward; waits for the user's v2 decision |
 | **P1c (Option B prep)** | IN PROGRESS | Done: guarded login (off until the switch), master + F&O flag, board-meetings CSV loader, official 1d ingest (nightly), compare1d, corporate actions + factors. Pending: section 4 |
+| **Scanner + journal** | BACKEND DONE 2026-11-03 | Decision support only (NOT validated edges, PAPER ONLY): `scan-v1` detectors, alerts + triple-barrier grades vs placebo, journal API. UI = Track C task. DESIGN "Decision-support scanner", DEVIATIONS D4 |
 | Switch to B | PLANNED | Fri 2026-11-20 evening (`SWITCH_TO_B.md` 6.2) |
 
 ## 3. Key research results (all SURVIVORSHIP-BIASED, EXPLORATORY)
@@ -37,6 +38,7 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **Model #1** (LightGBM + isotonic, purged walk-forward): AUC ~0.50, BSS ~0.
 - **Power check:** spec_gate is OFF (Nifty 500 < SMA200), so v1 makes **zero** entries in the current regime.
 - **Research sprint** (`DESIGN.md`, "Research sprint result"): no candidate's entry beat random entry with the same exits. The only finalist, C3b (PEAD, 60 sessions), failed its holdout (−0.202 R vs placebo). **The holdout window 2025-01-01 → 2026-10-21 has been used once; do not reuse it.**
+- **Momentum book C1a CLOSED (2026-11-03):** after tax it ties/loses to a Nifty200 Momentum 30 index fund; excess-return DSR at N≈30 = 0.23–0.27. No momentum forward test.
 - **Rajat setup** (Track B, after the sprint): every variant failed on the development window; no holdout run.
 - **Data facts:**
   - The provisional (15:40) and official bars differ only in **close** (LTP vs NSE close); high and low were never revised in 3 sessions.
@@ -48,8 +50,8 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 
 1. **P1c remaining** (target: complete 11-12, then shadow sessions 11-12 … 11-19):
    1. ~~Upstox `/v2/news` ingest~~ DONE 2026-11-02 (migration 0007, `p1 news`). The first live run had 120 requests, 0 errors, 173 articles. Versus Prajna over 6 days: 133 common, 60 only in Prajna, because the vendor drops older articles of busy stocks before 7 days and Prajna polls every 30 min. Fix: the 30-min cron (`ops/cron.txt`); the pre-switch gap is filled by the D1 copy.
-   2. Nightly intraday for the top 500 (1m/15m/1h → Parquet), plus the 1m gap 2026-04-29 → 07-17 after the switch (D3; ~0.5 GB).
-   3. The D1 copy tool (Prajna history → Drishti: 1d into Postgres, intraday into Parquet; per-month counts and hashes) and the first copy.
+   2. ~~Nightly intraday for the top 500~~ BUILT 2026-11-03 (`p1 intraday`, `drishti/data/intraday.py`; files in `/windows/drishti_data/intraday/`, overlap check vs Prajna in the run counts). Cron `0 1 * * 2-6` pending user install. First real run = the first night after install. The 1m gap 2026-04-29 → 07-17 stays for after the switch (D3; ~0.5 GB).
+   3. ~~The D1 copy tool~~ BUILT 2026-11-03 (`drishti/switch/d1copy.py`; `plan` / `copy [--delta]`). Dry run into `drishti_test` for 2026-09: 63/63 tables and 1d/1h/15m/1m bars all equal (count, OHLCV sums, md5 hash); delta path OK. 23 min for 28 M rows (1m 243 MB/month). Full copy #1 into `drishti` (after a backup) is planned for 11-11 night: ~230 M rows, ~3 h, ~3 GB on /windows (`/windows/drishti_data/prajna_copy/`). The dry-run output in `/windows/drishti_data/prajna_copy_dryrun/` can be deleted after that.
    4. Re-point Drishti's reads (`bars.py`, `bar_check`, `eod_quotes.universe_keys`, `run/p2.py`, the API) from Prajna's live DB to Drishti's tables, behind a flag.
    5. Vendor-applied detection for older CAs, once the copy brings Prajna's bars and observations.
    6. The switch scripts and checklist.
@@ -78,7 +80,13 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **The v2 research direction.** v1 is on hold; any new candidate needs a new untouched window, i.e. forward data.
 - **The second archive location** (external disk ≥ 128 GB or an rclone crypt remote). Needed before 11-20.
 - **Tick retention** (30 days now). The measured cost is ~0.03 GB/day for ~50 keys and ~0.15 GB/day for 300 keys, so 60+ days is affordable.
-- **Cron lines not yet installed** (`ops/cron.txt`): `news` every 30 min. The crontab has 13 Drishti lines now; with `news` it becomes 14.
+- **Cron lines not yet installed** (`ops/cron.txt`): `news` every 30 min, and the 3 scanner lines (`scan_eod` 19:45, `scan_intraday` every 15 min, `scan_grade` 09:45). The crontab has 13 Drishti lines now; with all four it becomes 17, and 18 with `intraday` (01:00).
+- **Telegram for the scanner:** optional; set `DRISHTI_TELEGRAM_BOT_TOKEN` and `DRISHTI_TELEGRAM_CHAT_ID` in `backend/.env` (otherwise the alert list is only logged).
+
+**Asked 2026-11-03, waiting for the user:**
+- A git remote for Drishti (none is configured; "push" is not possible yet). A private repo is recommended.
+- `drishti/data/live_quote.py` (committed `7b9b11a` from another session on user order) calls the Upstox quote API from the chart during market hours with Prajna's shared token: keep, restrict to after 15:35, or remove.
+- Next for Track A: the re-point (Drishti reads → copy + own ingest, behind a flag), then full copy #1 on 11-11 night.
 
 ## 6. Hard rules (summary; the full text is in `CLAUDE.md`)
 

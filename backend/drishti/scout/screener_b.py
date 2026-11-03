@@ -111,7 +111,93 @@ def screen(st: pd.DataFrame, eq_isins: set[str], blocked_isins: set[str], reg: d
 
 def metrics(r: pd.Series) -> dict:
     keys = ("close", "sma50", "sma200", "ema20", "atr", "atr_pct", "rsi", "hi52", "volr50",
-            "ret63", "tv20", "mr6", "mr12")
-    out = {k: round(float(r[k]), 6) for k in keys if pd.notna(r[k])}
+            "volr20", "volr20_max3", "prev_hi5", "ret63", "tv20", "mr6", "mr12")
+    out = {k: round(float(r[k]), 6) for k in keys if k in r and pd.notna(r[k])}
     out["dist_52w_high_pct"] = round(100 * (1 - r.close / r.hi52), 3)
+    if "prev_hi5" in out and out["prev_hi5"] > 0:
+        out["dist_prev_hi5_pct"] = round(100 * (1 - r.close / out["prev_hi5"]), 3)
     return out
+
+
+def tag_alpha(row: dict) -> dict:
+    """Evaluate Step 10, 11, 12 Alpha gates for a watchlist row."""
+    m = row.get("metrics") or {}
+    f = row.get("flags") or {}
+    close = m.get("close", 0)
+    hi52 = m.get("hi52", 0)
+    dist_52w = m.get("dist_52w_high_pct")
+    if dist_52w is None and hi52 > 0 and close > 0:
+        dist_52w = round(100 * (1 - close / hi52), 3)
+
+    volr20 = m.get("volr20")
+    volr20_max3 = m.get("volr20_max3")
+    volr50 = m.get("volr50", 0)
+
+    # Step 10: Smart Money Gate (Volume Surge)
+    vol_surge = (
+        (volr20 is not None and volr20 >= 1.5) or
+        (volr20_max3 is not None and volr20_max3 >= 1.5) or
+        (volr50 >= 1.25)
+    )
+
+    # Step 11: Event Risk Gate (No earnings meeting in next 6 sessions)
+    has_results = bool(f.get("results_meeting"))
+    no_earnings = not has_results
+
+    # Step 12: Immediate Trigger (Within 3% of 52W high OR 5-day breakout)
+    near_52w = (dist_52w is not None and dist_52w <= 3.0)
+    prev_hi5 = m.get("prev_hi5")
+    is_breakout = (prev_hi5 is not None and close >= prev_hi5)
+    trigger_ready = near_52w or is_breakout
+
+    tags = []
+    if vol_surge:
+        tags.append("VOL_SURGE")
+    if no_earnings:
+        tags.append("EVENT_SAFE")
+    if near_52w:
+        tags.append("NEAR_52W_HIGH")
+    if is_breakout:
+        tags.append("5D_BREAKOUT")
+
+    is_strict = vol_surge and no_earnings and trigger_ready
+    is_relaxed = no_earnings and (vol_surge or trigger_ready)
+
+    return {
+        **row,
+        "is_vol_surge": vol_surge,
+        "is_no_earnings": no_earnings,
+        "is_trigger_ready": trigger_ready,
+        "alpha_tags": tags,
+        "is_strict_alpha": is_strict,
+        "is_relaxed_alpha": is_relaxed,
+    }
+
+
+def extract_alpha_watchlist(rows: list[dict], min_target: int = 5, max_target: int = 10) -> tuple[list[dict], dict]:
+    """Filter broad watchlist down to top 5-10 high opportunity alpha candidates."""
+    tagged = [tag_alpha(r) for r in rows]
+    strict = [r for r in tagged if r["is_strict_alpha"]]
+    strict.sort(key=lambda r: (r.get("rank") or 999))
+
+    if len(strict) >= min_target:
+        selected = [dict(r) for r in strict[:max_target]]
+    else:
+        # backfill from relaxed candidates who have no earnings and either volume or near-high
+        relaxed = [r for r in tagged if r["is_relaxed_alpha"] and not r["is_strict_alpha"]]
+        relaxed.sort(key=lambda r: (r.get("rank") or 999))
+        selected = [dict(r) for r in (strict + relaxed)[:max_target]]
+
+    for idx, r in enumerate(selected, start=1):
+        r["alpha_rank"] = idx
+
+    counts = {
+        "total": len(rows),
+        "vol_surge": sum(1 for r in tagged if r["is_vol_surge"]),
+        "no_earnings": sum(1 for r in tagged if r["is_no_earnings"]),
+        "trigger_ready": sum(1 for r in tagged if r["is_trigger_ready"]),
+        "strict_alpha": len(strict),
+        "selected_alpha": len(selected),
+    }
+    return selected, counts
+

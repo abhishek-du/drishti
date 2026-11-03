@@ -113,3 +113,28 @@ def test_watchlist_tables_are_append_only_in_test_db():
                     await c.execute(text(sql), {"r": rid})
         await engine().dispose()
     asyncio.run(go())
+
+
+def test_alpha_funnel():
+    rows = [
+        # Stock 1: Qualifies all 3 (Strict Alpha)
+        {"symbol": "STOCK1", "rank": 1, "metrics": {"close": 100, "hi52": 101, "dist_52w_high_pct": 0.99, "volr20": 1.8}, "flags": {"results_meeting": None}},
+        # Stock 2: Has upcoming earnings -> Dropped by Step 11
+        {"symbol": "STOCK2", "rank": 2, "metrics": {"close": 100, "hi52": 101, "dist_52w_high_pct": 0.99, "volr20": 2.0}, "flags": {"results_meeting": "2026-11-06"}},
+        # Stock 3: Low volume -> Fails Step 10
+        {"symbol": "STOCK3", "rank": 3, "metrics": {"close": 100, "hi52": 101, "dist_52w_high_pct": 0.99, "volr20": 0.8, "volr50": 0.9}, "flags": {"results_meeting": None}},
+        # Stock 4: 5-Day breakout with volume surge (Strict Alpha)
+        {"symbol": "STOCK4", "rank": 4, "metrics": {"close": 105, "hi52": 115, "dist_52w_high_pct": 8.7, "prev_hi5": 104, "volr50": 1.4}, "flags": {"results_meeting": None}},
+    ]
+    tagged = [sb.tag_alpha(r) for r in rows]
+    assert tagged[0]["is_strict_alpha"] and "VOL_SURGE" in tagged[0]["alpha_tags"] and "EVENT_SAFE" in tagged[0]["alpha_tags"]
+    assert not tagged[1]["is_strict_alpha"] and not tagged[1]["is_no_earnings"]
+    assert not tagged[2]["is_strict_alpha"] and not tagged[2]["is_vol_surge"]
+    assert tagged[3]["is_strict_alpha"] and "5D_BREAKOUT" in tagged[3]["alpha_tags"]
+
+    selected, counts = sb.extract_alpha_watchlist(rows, min_target=2, max_target=10)
+    assert len(selected) == 2
+    assert selected[0]["symbol"] == "STOCK1" and selected[0]["alpha_rank"] == 1
+    assert selected[1]["symbol"] == "STOCK4" and selected[1]["alpha_rank"] == 2
+    assert counts["strict_alpha"] == 2
+

@@ -10,6 +10,7 @@
     .venv/bin/python -m drishti.run.p1 compare1d [--date D]           # vs Prajna (shadow)
     .venv/bin/python -m drishti.run.p1 ca [--limit N] [--isins A,B]   # corporate actions (P1c)
     .venv/bin/python -m drishti.run.p1 news [--limit N]               # Upstox /v2/news (P1c, D2)
+    .venv/bin/python -m drishti.run.p1 intraday [--date D] [--limit N] [--tf 1m,15m,1h]  # D3
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from drishti.core.clock import IST, now, today
 from drishti.core.config import BACKEND, get_settings
 from drishti.core.db import prajna_sessionmaker, sessionmaker
 from drishti.data import (bar_check, corporate_actions, daily1d, eod_quotes, holidays, indices,
-                          manual, master, news)
+                          intraday, manual, master, news)
 
 
 async def trading_day(s, d: _dt.date) -> bool:
@@ -177,6 +178,26 @@ async def main(cmd: str, args: list[str]) -> dict:
                 async with prajna_sessionmaker()() as ps:
                     out["vs_prajna"] = await news.compare_with_prajna(
                         s, ps, now() - _dt.timedelta(days=6))
+            elif cmd == "intraday":
+                if not daily1d.a_rule_ok(now()):
+                    raise SystemExit("REFUSED: decision A: historical API only 22:00-05:30 IST "
+                                     "until the switch")
+                t = now()
+                if "--date" in args:
+                    day = _dt.date.fromisoformat(args[args.index("--date") + 1])
+                elif t.hour >= 16 and await trading_day(s, t.date()):
+                    day = t.date()
+                else:
+                    day = await previous_session(s, t.date())
+                keys = await intraday.top_keys(s, await previous_session(s, day))
+                if "--limit" in args:
+                    keys = keys[:int(args[args.index("--limit") + 1])]
+                tfs = args[args.index("--tf") + 1].split(",") if "--tf" in args \
+                    else list(intraday.TFS)
+                out = intraday.fetch(Upstox(fraction=min(
+                    0.5, get_settings().DRISHTI_UPSTOX_RATE_FRACTION)), keys, day, tfs)
+                async with prajna_sessionmaker()() as ps:
+                    out["vs_prajna"] = await intraday.compare_with_prajna(ps, day, tfs)
             elif cmd == "compare1d":
                 from sqlalchemy import text
                 day = _dt.date.fromisoformat(args[args.index("--date") + 1]) if "--date" in args \

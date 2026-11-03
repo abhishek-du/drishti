@@ -36,6 +36,48 @@ COLS = ["time", "session_date", "open", "high", "low", "close", "volume", "vwap"
 TTL_S = 30.0
 TTL_LIVE_S = 10.0    # 1m/5m: the chart refreshes indicator values every 10 s
 _cache: dict[tuple[str, str], tuple[float, tuple[pd.DataFrame, list[dict]]]] = {}
+_quote_cache: dict[str, tuple[float, dict]] = {}
+
+
+def get_live_quote(key: str) -> dict | None:
+    now_t = time.monotonic()
+    hit = _quote_cache.get(key)
+    if hit and now_t - hit[0] < 10.0:
+        return hit[1]
+
+    # 1. Check summary.json
+    try:
+        sum_file = LIVE_DIR / "summary.json"
+        if sum_file.exists():
+            s = json.loads(sum_file.read_text())
+            q = s.get("keys", {}).get(key)
+            if q and q.get("ltp") is not None:
+                info = {
+                    "ltp": float(q["ltp"]),
+                    "net_change": float(q.get("chg") or 0.0),
+                    "pct_change": float(q.get("chg_pct") or 0.0),
+                    "vwap": float(q["vwap"]) if q.get("vwap") else None,
+                    "open": None,
+                    "high": None,
+                    "low": None,
+                    "volume": None,
+                    "upper_circuit": None,
+                    "lower_circuit": None,
+                    "is_upper_circuit": False,
+                    "is_lower_circuit": False,
+                }
+                _quote_cache[key] = (now_t, info)
+                return info
+    except Exception:
+        pass
+
+    # 2. Query live quote provider
+    from drishti.data.live_quote import fetch_quote
+    info = fetch_quote(key)
+    if info:
+        _quote_cache[key] = (now_t, info)
+        return info
+    return None
 
 
 def bars_1m_dir() -> Path:
@@ -177,13 +219,33 @@ async def _load_1d(key: str) -> tuple[pd.DataFrame, list[dict]]:
     if not prov.empty and (df.empty or df.session_date.max() < day):
         df = pd.concat([df, prov.assign(src="provisional")[df.columns] if not df.empty
                         else prov.assign(src="provisional")], ignore_index=True)
+    elif df.empty or df.session_date.max() < day:
+        # Before 15:40 EOD sync, today's provisional bar doesn't exist yet.
+        # Append today's live candle from real-time quote so the chart reflects today's session!
+        q = get_live_quote(key)
+        if q and q.get("ltp") is not None:
+            live_bar = pd.DataFrame([{
+                "instrument_key": key,
+                "session_date": day,
+                "open": q.get("open") or q["ltp"],
+                "high": q.get("high") or q["ltp"],
+                "low": q.get("low") or q["ltp"],
+                "close": q["ltp"],
+                "volume": q.get("volume") or 0.0,
+                "vwap": q.get("vwap") or np.nan,
+                "src": "live_quote",
+            }])
+            df = pd.concat([df, live_bar], ignore_index=True)
+
     if df.empty:
         return pd.DataFrame(columns=COLS + ["src"]), []
     df = df.sort_values("session_date").reset_index(drop=True)
     df["time"] = df.session_date.astype(str)
-    df["vwap"] = np.nan
+    if "vwap" not in df.columns:
+        df["vwap"] = np.nan
     src = sources(df, {"official": "Prajna official 1d (adjusted)",
-                       "provisional": "Drishti provisional 1d (EOD quote)"})
+                       "provisional": "Drishti provisional 1d (EOD quote)",
+                       "live_quote": "Real-time market quote (Live)"})
     return df[COLS + ["src"]], src
 
 

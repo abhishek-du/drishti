@@ -57,3 +57,17 @@ The user accepted in writing that **there is no full backup of the `prajna` data
    - It comes after the cron diff, before the delta copy's verification is signed off, and before 3.1 or any other Prajna change.
    - It gets a sha256 and a `pg_restore -l` TOC check. A test restore into a scratch database is also done if space allows.
    - It is stored on /windows (63 GB free after this delete; the 10-27 full dump was 10.1 GB) and on the second location once that exists.
+
+## D4 (2026-11-03): an editable table and a write endpoint, for the user's journal
+
+**Rule affected:** Drishti tables are append-only (trigger `drishti_append_only`), and the API is read only.
+
+**What changed (user request 2026-11-03, the decision-support scanner):**
+- `journal_entry` (migration 0008) has no append-only trigger: the user edits status (watching / took / skipped), actual entry/qty and notes.
+- `POST /api/journal/{alert_id}` is the only write endpoint of the API.
+
+**Safeguards:**
+- Every change is also appended to `journal_event` (append-only), so the edit history is complete.
+- The grades (`journal_outcome`) and the alerts (`scan_alert`) stay append-only; a changed actual entry gets a new `took` grade, and the latest row wins.
+- Backups before the migration: `globals_20261103T1205_pre_drishti_0008.sql` and `drishti_20261103T1205_pre_0008.dump` in `/windows/prajna_archive` (sha256 verified).
+- PAPER ONLY: nothing in the scanner or the journal places, changes or cancels an order.

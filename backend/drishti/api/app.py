@@ -19,12 +19,13 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 
-from drishti.api import chart_api
+from drishti.api import chart_api, scan_api
 from drishti.core.clock import today
 from drishti.core.config import BACKEND
 from drishti.core.db import prajna_sessionmaker, sessionmaker
 from drishti.data import bars, manual
 from drishti.features import candles, indicators, levels
+from drishti.scout import screener_b as sb
 
 LIVE_DIR = Path("/dev/shm/drishti_live")
 LIVE_HEALTH = BACKEND / "var" / "run" / "live_health.json"
@@ -32,6 +33,7 @@ LIVE_LABEL = "LIVE VIEW - not used by drishti-swing-v1"
 
 app = FastAPI(title="Drishti", docs_url="/api/docs", openapi_url="/api/openapi.json")
 app.include_router(chart_api.router)  # Track C chart endpoints (read only)
+app.include_router(scan_api.router)   # scanner + journal (decision support; the only writes)
 
 
 def _f(x):
@@ -90,9 +92,18 @@ async def watchlist(date: _dt.date | None = None) -> dict:
         rows = (await s.execute(text("""select instrument_key, symbol, event, rank, rs_score,
             metrics, flags from watchlist_event where run_id = :r
             order by rank nulls last, instrument_key"""), {"r": run["run_id"]})).mappings().all()
-    return {"run": {**dict(run), "run_id": str(run["run_id"])},
-            "rows": [dict(r, rs_score=_f(r["rs_score"])) for r in rows if r["event"] != "DROPPED"],
-            "dropped": [r["instrument_key"] for r in rows if r["event"] == "DROPPED"]}
+
+    clean_rows = [dict(r, rs_score=_f(r["rs_score"])) for r in rows if r["event"] != "DROPPED"]
+    alpha_rows, alpha_counts = sb.extract_alpha_watchlist(clean_rows)
+    tagged_rows = [sb.tag_alpha(r) for r in clean_rows]
+
+    return {
+        "run": {**dict(run), "run_id": str(run["run_id"])},
+        "rows": tagged_rows,
+        "dropped": [r["instrument_key"] for r in rows if r["event"] == "DROPPED"],
+        "alpha_rows": alpha_rows,
+        "alpha_counts": alpha_counts,
+    }
 
 
 @app.get("/api/search")
