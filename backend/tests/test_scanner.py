@@ -224,3 +224,40 @@ def test_eod_as_of_and_zone_dates_are_point_in_time():
     for h in h1:
         for z in h["zones_used"].values():
             assert z["last"] + 5 <= t                                 # pivots confirmed by t
+
+
+def test_low_rr_alert_moves_its_target_to_r2_or_2r():
+    # JINDALPOLY 2026-11-02: entry 690.55, stop 653.16, R1 690.75 (0.2 above), R2 748.57
+    ct = detect.choose_target(690.55, 653.16, 690.75, 748.57, 267)
+    assert ct["low_rr"] and ct["net_rr_r1"] < 0 and ct["target_basis"] == "R2"
+    assert ct["target"] == 748.57 and ct["net_rr_target"] >= 1
+    ct = detect.choose_target(100.0, 95.0, 100.5, 102.0, 2000)        # both too close: 2R
+    assert ct["target_basis"] == "2R" and ct["target"] == 110.0 and ct["low_rr"]
+    ct = detect.choose_target(100.0, 95.0, 110.0, 120.0, 2000)        # a good R1 stays
+    assert ct["target_basis"] == "R1" and not ct["low_rr"]
+    ct = detect.choose_target(100.0, 95.0, None, None, 2000)          # no resistance: 2R
+    assert ct["target_basis"] == "2R" and not ct["low_rr"]
+
+
+def test_grade_uses_the_chosen_target():
+    a = {"id": 9, "tf": "1d", "entry_ref": 100.0, "stop": 95.0, "r1": 100.5, "r2": None,
+         "qty": 2000}
+    r = grade.grade(a, *_bars([[99, 101, 98, 100], [100, 111, 99, 110]]), "alert")
+    assert r["target_used"] == 110.0 and r["outcome"] == "R1"        # 2R, not R1 = 100.5
+
+
+def test_odds_job_plan_and_data_cut_are_point_in_time():
+    import datetime as dt
+    from drishti.core.clock import IST
+    from drishti.scanner import odds_job
+    a = {"id": 8, "session_date": dt.date(2026, 11, 2), "instrument_key": "K", "symbol": "J",
+         "entry_ref": 690.55, "stop": 653.16, "r1": 690.75, "r2": 748.57, "qty": 267,
+         "context": {}, "status": "took", "actual_entry": 691.0, "actual_qty": 200}
+    assert odds_job.data_cut(a) == dt.datetime(2026, 11, 2, 19, 45, tzinfo=IST)
+    a2 = {**a, "context": {"as_of": "2026-11-03T19:45:05+05:30"}}
+    assert odds_job.data_cut(a2).isoformat() == "2026-11-03T19:45:05+05:30"
+    ps = odds_job.plans_for(a)
+    assert [p.basis for p in ps] == ["alert", "took"] and all(p.target == 748.57 for p in ps)
+    assert ps[0].as_of == dt.date(2026, 11, 3)                        # bars < as_of only
+    assert odds_job.verdict_kind("Net R:R 1.1 needs ... Base rates LOSE on this") == \
+        "BASE RATES LOSE"

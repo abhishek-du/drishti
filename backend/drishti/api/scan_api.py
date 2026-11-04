@@ -48,6 +48,17 @@ def _row(r) -> dict:
     return {k: _j(v) for k, v in dict(r).items()}
 
 
+def _with_target(a: dict) -> dict:
+    """The target the grader uses (detect.choose_target: R1 if its net R:R >= 1, else R2, else
+    2R) and the low R:R tag, computed from the stored fields, so old alerts get them too."""
+    from drishti.scanner.detect import choose_target
+    if a.get("entry_ref") is None or a.get("stop") is None:
+        return a
+    ct = choose_target(a["entry_ref"], a["stop"], a.get("r1"), a.get("r2"), a.get("qty") or 0)
+    return {**a, **{k: (round(v, 4) if isinstance(v, float) else v) for k, v in ct.items()},
+            "tags": ["low R:R"] if ct["low_rr"] else []}
+
+
 @router.get("/api/scan/alerts")
 async def alerts(date: _dt.date | None = None, tf: Literal["1d", "15m"] | None = None,
                  detector: str | None = None) -> dict:
@@ -66,7 +77,7 @@ async def alerts(date: _dt.date | None = None, tf: Literal["1d", "15m"] | None =
         dates = [str(d) for d in (await s.execute(text("""select distinct session_date
             from scan_alert order by 1 desc limit 60"""))).scalars()]
     return {"label": LABEL, "version": VERSION, "session": _j(day), "dates": dates,
-            "detectors": list(DETECTORS), "alerts": [_row(r) for r in rows]}
+            "detectors": list(DETECTORS), "alerts": [_with_target(_row(r)) for r in rows]}
 
 
 @router.get("/api/scan/alert/{alert_id}")
@@ -83,13 +94,19 @@ async def alert(alert_id: int) -> dict:
                              {"i": alert_id})).mappings().all()
         ev = (await s.execute(text("""select change, at from journal_event where alert_id = :i
             order by at"""), {"i": alert_id})).mappings().all()
-    a = _row(a)
+        od = (await s.execute(text("""select distinct on (basis) basis, as_of, entry, stop,
+            target, horizon, qty, version, seed, params, pool, mc, replay, p_target_mc,
+            breakeven, verdict, label, caveat, data_as_of, created_at from odds_result
+            where alert_id = :i order by basis, created_at desc, id desc"""),
+            {"i": alert_id})).mappings().all()
+    a = _with_target(_row(a))
     risk = a["entry_ref"] - a["stop"]
     a["risk_per_share"] = round(risk, 4)
     a["risk_rupees"] = round(risk * (a["qty"] or 0), 2)
     a["r2_rr"] = round((a["r2"] - a["entry_ref"]) / risk, 2) if a["r2"] and risk > 0 else None
     return {"label": LABEL, "alert": a, "grades": {r["basis"]: _row(r) for r in g},
-            "journal_history": [_row(e) for e in ev]}
+            "journal_history": [_row(e) for e in ev],
+            "odds": {r["basis"]: _row(r) for r in od}}
 
 
 class JournalIn(BaseModel):
@@ -194,3 +211,26 @@ async def stats(since: _dt.date | None = None, until: _dt.date | None = None,
             "overall": pick(None), "by_detector": {d: pick(d) for d in DETECTORS},
             "note": "Small samples mean nothing: a few dozen trades cannot separate skill from "
                     "luck. Compare 'took' with 'placebo', not with zero."}
+
+
+@router.get("/api/radar")
+async def radar_list(date: _dt.date | None = None) -> dict:
+    """The Live Radar of one session (default: the latest with entries): stocks that newly met
+    Scout's criteria intraday (radar-v1), when, why, and the setup alerts found on them since."""
+    from drishti.scanner.radar import CAVEAT, CRITERIA, LABEL as RL, VERSION as RV
+    async with sessionmaker()() as s:
+        day = date or (await s.execute(text("select max(session_date) from radar_event"))).scalar()
+        rows = [] if day is None else (await s.execute(text("""
+            select r.id, r.session_date, r.bar_time, r.instrument_key, r.symbol, r.version,
+                   r.reason, r.criteria, r.metrics, r.created_at,
+                   (select count(*) from scan_alert a where a.instrument_key = r.instrument_key
+                      and a.session_date = r.session_date and a.tf = '15m'
+                      and a.bar_time >= r.bar_time) as alerts_since
+            from radar_event r where r.session_date = :d order by r.bar_time, r.id"""),
+            {"d": day})).mappings().all()
+        dates = [str(d) for d in (await s.execute(text("""select distinct session_date
+            from radar_event order by 1 desc limit 60"""))).scalars()]
+    return {"label": RL, "caveat": CAVEAT, "version": RV, "criteria": list(CRITERIA),
+            "session": _j(day), "dates": dates, "rows": [_row(r) for r in rows],
+            "note": "Bar time = start of the last closed 15m bar used (IST = UTC + 5:30). "
+                    "Separate from the EOD watchlist; Scout thresholds unchanged."}

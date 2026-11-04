@@ -30,6 +30,7 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 | P6 / forward test | **ON HOLD** | v1 is not taken forward; waits for the user's v2 decision |
 | **P1c (Option B prep)** | IN PROGRESS | Done: guarded login (off until the switch), master + F&O flag, board-meetings CSV loader, official 1d ingest (nightly), compare1d, corporate actions + factors. Pending: section 4 |
 | **Scanner + journal** | BACKEND DONE 2026-11-03 | Decision support only (NOT validated edges, PAPER ONLY): `scan-v1` detectors, alerts + triple-barrier grades vs placebo, journal API. UI = Track C task. DESIGN "Decision-support scanner", DEVIATIONS D4 |
+| **Live Radar** | BUILT 2026-11-04 | Intraday re-run of Scout's criteria on the liquid/F&O universe every 15 min (partial daily bar to the last closed 15m bar); new names go to `radar_event` and get setup scans. First full day 11-05. DESIGN "Live Radar"; UI = Track C task |
 | Switch to B | PLANNED | Fri 2026-11-20 evening (`SWITCH_TO_B.md` 6.2) |
 
 ## 3. Key research results (all SURVIVORSHIP-BIASED, EXPLORATORY)
@@ -89,6 +90,8 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **Do not rely on intraday alerts for split- or bonus-affected stocks** until the 15m path applies CA factors.
 - The 11-20 switch alone does not fix it: the fix is part of the re-point (P1c item 4).
 - EOD alerts are fine (adjusted 1d).
+
+**Cron line to install (2026-11-04):** `15 20 * * 1-5 … drishti_job.sh odds`, the nightly Time Machine odds for the day's 1d alerts. Also still pending: `30 4 * * 2-6 … intraday --missing`.
 
 **Asked 2026-11-03, waiting for the user:**
 - A git remote for Drishti (none is configured; "push" is not possible yet). A private repo is recommended.
