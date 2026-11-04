@@ -92,7 +92,7 @@ export default function AlertPage() {
           </div>
           <div className="card">
             <b>Saved zones (as the alert saw them)</b>
-            {saved.length === 0 ? <p className="muted small" style={{ margin: "4px 0 0" }}>No saved zones on this alert{a.r1 === null ? " (no resistance above: R1 = entry + 2R)" : ""}. Today&apos;s zones are not used here.</p> : (
+            {saved.length === 0 ? <p className="muted small" style={{ margin: "4px 0 0" }}>No saved zones on this alert{a.r1 === null ? " (no resistance above: R1 = entry + 2R)" : ""}. The chart shows the S/R known at the alert bar (from the chart&apos;s bars up to that bar), not today&apos;s zones.</p> : (
               <table className="kv"><tbody>{saved.map((z) => (
                 <tr key={z.name}><td>{z.name.toUpperCase()} band</td>
                   <td>{fmt(z.bottom)}–{fmt(z.top)}{z.touches ? ` · ×${z.touches}` : ""}

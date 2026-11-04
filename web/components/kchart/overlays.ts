@@ -135,12 +135,12 @@ const stop: OverlayTemplate = {
 const level: OverlayTemplate = {
   name: "d_level", totalStep: 2, lock: true, needDefaultPointFigure: false,
   createPointFigures: ({ coordinates, bounding, overlay }) => {
-    const e = (overlay.extendData ?? {}) as { label?: string; color?: string; dashed?: boolean };
+    const e = (overlay.extendData ?? {}) as { label?: string; color?: string; dashed?: boolean; offset?: number };
     const y = coordinates[0].y, color = e.color ?? "#3a86ff";
     return [
       { type: "line", ignoreEvent: true, attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] },
         styles: { style: e.dashed ? "dashed" : "solid", size: 2.5, color, dashedValue: [8, 4] } },
-      { type: "text", ignoreEvent: true, attrs: { x: bounding.width - 6, y: y - 2, text: e.label ?? "", align: "right", baseline: "bottom" },
+      { type: "text", ignoreEvent: true, attrs: { x: bounding.width - 6 - (e.offset ?? 0), y: y - 2, text: e.label ?? "", align: "right", baseline: "bottom" },
         styles: { color: "#fff", backgroundColor: color, size: 12, weight: "bold", paddingLeft: 5, paddingRight: 5, paddingTop: 2, paddingBottom: 2, borderRadius: 3 } },
     ];
   },
@@ -152,14 +152,15 @@ const band: OverlayTemplate = {
   name: "d_band", totalStep: 2, lock: true, needDefaultPointFigure: false,
   createPointFigures: ({ bounding, overlay, yAxis }) => {
     if (!yAxis) return [];
-    const e = (overlay.extendData ?? {}) as { top: number; bottom: number; label: string };
+    const e = (overlay.extendData ?? {}) as { top: number; bottom: number; label: string; color?: string; xf?: number };
+    const rgb = e.color ?? "rgba(47,158,68,";      // "rgba(r,g,b," prefix: alpha added per figure
     const a = yAxis.convertToPixel(e.top), b = yAxis.convertToPixel(e.bottom);
     const y0 = Math.min(a, b), y1 = Math.max(a, b);
     return [
       { type: "rect", ignoreEvent: true, attrs: { x: 0, y: y0, width: bounding.width, height: Math.max(1, y1 - y0) },
-        styles: { style: "stroke_fill", color: "rgba(47,158,68,.16)", borderColor: "rgba(47,158,68,.55)", borderSize: 1, borderStyle: "dashed" } },
-      { type: "text", ignoreEvent: true, attrs: { x: bounding.width * 0.45, y: y0 - 1, text: e.label, align: "center", baseline: "bottom" },
-        styles: { color: "#fff", backgroundColor: "rgba(47,158,68,.85)", size: 10, paddingLeft: 3, paddingRight: 3, paddingTop: 1, paddingBottom: 1, borderRadius: 2 } },
+        styles: { style: "stroke_fill", color: `${rgb}.16)`, borderColor: `${rgb}.55)`, borderSize: 1, borderStyle: "dashed" } },
+      { type: "text", ignoreEvent: true, attrs: { x: bounding.width * (e.xf ?? 0.45), y: y0 - 1, text: e.label, align: "center", baseline: "bottom" },
+        styles: { color: "#fff", backgroundColor: `${rgb}.85)`, size: 10, paddingLeft: 3, paddingRight: 3, paddingTop: 1, paddingBottom: 1, borderRadius: 2 } },
     ];
   },
 };
