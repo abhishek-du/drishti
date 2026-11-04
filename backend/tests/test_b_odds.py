@@ -112,9 +112,9 @@ def test_bootstrap_blocks_contiguous():
 def test_short_history_and_long_only():
     b = bars(100)
     r = odds.odds(plan(b, 90), b, SMALL)
-    assert r["mc"] == {"n": 0} and r["verdict"].startswith("NO VERDICT")
+    assert r["mc"] == {"n": 0} and "NO VERDICT" in r["verdict"] and r["thin_sample"]
     with pytest.raises(ValueError):
-        odds.odds(odds.Plan("k", dt.date(2023, 1, 2), 100, 105, 110), bars(), SMALL)
+        odds.odds(odds.Plan("k", dt.date(2023, 1, 2), 100, 105, 110, 5), bars(), SMALL)
 
 
 def test_calibration():
@@ -132,3 +132,21 @@ def test_verdict_branches():
     assert odds.verdict(mc2, 1.5, 0.4).startswith("MOSTLY NEITHER")
     mc3 = {**mc, "target_first": 0.25, "stop_first": 0.55, "neither": 0.2}
     assert "LOSE" in odds.verdict(mc3, 1.45, 1 / 2.45)
+
+
+def test_thin_sample_flag():
+    b = bars(600)
+    r = odds.odds(plan(b), b, SMALL)
+    assert r["replay_n"] == r["replay"]["n"] >= odds.THIN_N and not r["thin_sample"]
+    assert odds.row(r)["replay_n"] == r["replay_n"]
+    # 290 bars: pool >= MIN_POOL, but a long horizon + embargo leaves < 30 windows
+    b2 = bars(290)
+    p2 = odds.Plan("k", b2.session_date.iloc[-1] + dt.timedelta(days=1), 100, 96, 108, 260)
+    r2 = odds.odds(p2, b2, SMALL)
+    assert r2["thin_sample"] and r2["replay_n"] < odds.THIN_N
+    assert r2["verdict"].startswith("THIN SAMPLE")
+
+
+def test_horizon_required():
+    with pytest.raises(TypeError):
+        odds.Plan("k", dt.date(2023, 1, 2), 100, 95, 110)

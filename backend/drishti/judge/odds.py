@@ -58,9 +58,11 @@ LABEL = ("Odds from the stock's own history — a reality check on your stop/tar
 CAVEAT = ("Stationarity: the recent past may not resemble the future (results, news, circuits, "
           "a regime change). Replay occurrences overlap, so they are not independent. Taxes "
           "are not included.")
-VERSION = "odds-1d-v1"
+VERSION = "odds-1d-v2"
 SEED = 20261104
 MIN_POOL = 250
+THIN_N = 30                      # replay windows below this: THIN SAMPLE, not reliable
+GRADER_HOLD_1D = 5               # drishti.scanner.grade.HOLD['1d']: what journal_outcome measures
 
 PROPOSED_DDL = """-- PROPOSED for Track A (Track B does not own migrations): odds per plan, append-only
 CREATE TABLE odds_result (
@@ -71,6 +73,7 @@ CREATE TABLE odds_result (
   as_of date NOT NULL, tf varchar(4) NOT NULL DEFAULT '1d',
   entry numeric(14,4) NOT NULL, stop numeric(14,4) NOT NULL, target numeric(14,4) NOT NULL,
   horizon integer NOT NULL, qty integer NOT NULL,
+  replay_n integer NOT NULL, thin_sample boolean NOT NULL,   -- replay windows; thin = < 30
   version varchar(16) NOT NULL, seed bigint NOT NULL, code_sha varchar(40),
   params jsonb NOT NULL,                         -- n_paths, block, lookback, embargo, slip_r, bps
   pool jsonb NOT NULL,                           -- first/last pool date, n days
@@ -89,7 +92,7 @@ class Plan:
     entry: float
     stop: float
     target: float
-    horizon: int = 5
+    horizon: int                 # sessions; explicit per plan, no default (user 2026-11-04)
     qty: int | None = None
     symbol: str | None = None
     alert_id: int | None = None
@@ -262,6 +265,7 @@ def odds(plan: Plan, bars: pd.DataFrame, prm: Params = Params()) -> dict:
                     "last": str(pool.session_date.iloc[-1]) if len(pool) else None}}
     if len(pool) < MIN_POOL:
         out.update(mc={"n": 0}, replay={"n": 0}, verdict=verdict({"n": 0}, r_net, p_be))
+        _thin(out)
         return out
     a = b.assign(tr=np.maximum(b.high, b.close.shift()) - np.minimum(b.low, b.close.shift()))
     atr_pct = (a.tr / a.close.shift()).rolling(14).mean()
@@ -285,7 +289,18 @@ def odds(plan: Plan, bars: pd.DataFrame, prm: Params = Params()) -> dict:
     else:
         out["replay"] = {"n": 0}
     out["verdict"] = verdict(out["mc"], r_net, p_be)
+    _thin(out)
     return out
+
+
+def _thin(out: dict) -> None:
+    n = int(out["replay"].get("n", 0))
+    out["replay_n"] = n
+    out["replay_n_independent"] = n // out["plan"]["horizon"]
+    out["thin_sample"] = n < THIN_N
+    if out["thin_sample"]:
+        out["verdict"] = (f"THIN SAMPLE (N = {n} replay windows < {THIN_N}): NOT reliable, do "
+                          "not act on it. " + out["verdict"])
 
 
 def row(res: dict) -> dict:
@@ -294,6 +309,8 @@ def row(res: dict) -> dict:
     return {"alert_id": p["alert_id"], "basis": p["basis"], "instrument_key": p["instrument_key"],
             "symbol": p["symbol"], "as_of": p["as_of"], "tf": "1d", "entry": p["entry"],
             "stop": p["stop"], "target": p["target"], "horizon": p["horizon"], "qty": p["qty"],
+            "replay_n": res["replay_n"], "replay_n_independent": res["replay_n_independent"],
+            "thin_sample": res["thin_sample"],
             "version": res["version"], "seed": res["seed"], "code_sha": res.get("code_sha"),
             "params": res["params"], "pool": res["pool"], "mc": res["mc"],
             "replay": res["replay"], "p_target_mc": res["mc"].get("target_first"),
@@ -354,9 +371,10 @@ async def resolve(ps, symbol: str) -> str:
     return k
 
 
-async def alert_plans(s, session: _dt.date | None) -> list[Plan]:
+async def alert_plans(s, session: _dt.date | None, horizon: int) -> list[Plan]:
     """Plans from the 1d scan alerts (+ the 'took' journal entries with an actual entry),
-    mapped as the nightly grader does: target R1, else entry + 2R; horizon 5 sessions;
+    mapped as the nightly grader does: target R1, else entry + 2R; `horizon` explicit (the
+    grader times out at GRADER_HOLD_1D = 5);
     as_of = the session after the detection bar (bars <= the detection day are read)."""
     from sqlalchemy import text
     q = """select a.id, a.session_date, a.instrument_key, a.symbol, a.entry_ref, a.stop, a.r1,
@@ -371,11 +389,11 @@ async def alert_plans(s, session: _dt.date | None) -> list[Plan]:
             continue
         as_of = r["session_date"] + _dt.timedelta(days=1)
         t = float(r["r1"]) if r["r1"] and float(r["r1"]) > e else e + 2 * (e - st)
-        out.append(Plan(r["instrument_key"], as_of, e, st, t, 5, r["qty"], r["symbol"],
+        out.append(Plan(r["instrument_key"], as_of, e, st, t, horizon, r["qty"], r["symbol"],
                         r["id"], "alert"))
         if r["status"] == "took" and r["actual_entry"] and st < float(r["actual_entry"]) < t:
             ae = float(r["actual_entry"])
-            out.append(Plan(r["instrument_key"], as_of, ae, st, t, 5,
+            out.append(Plan(r["instrument_key"], as_of, ae, st, t, horizon,
                             r["actual_qty"] or r["qty"], r["symbol"], r["id"], "took"))
     return out
 
@@ -394,7 +412,8 @@ def text_report(res: dict) -> str:
     L = [res["label"], "",
          f"{p['symbol'] or p['instrument_key']}  as-of {p['as_of']}  E {p['entry']:.2f}  "
          f"S {p['stop']:.2f} (-{p['stop_pct']:.1%})  T {p['target']:.2f} "
-         f"(+{p['target_pct']:.1%})  H {p['horizon']}  qty {p['qty']}",
+         f"(+{p['target_pct']:.1%})  H {p['horizon']}  qty {p['qty']}  replay N "
+         f"{res['replay_n']}{' THIN' if res['thin_sample'] else ''}",
          f"seed {res['seed']}  version {res['version']}  pool {res['pool']['first']} .. "
          f"{res['pool']['last']} ({res['pool']['n_days']} days)  slip-through "
          f"-{res['params']['slip_r']} R  slippage {res['params']['bps']} bps/side", "",
@@ -425,9 +444,11 @@ async def _main(args: list[str]) -> None:
         if "--calibrate" in args:
             done = [json.loads(x) for x in (outdir / "odds_results.jsonl").read_text()
                     .splitlines()] if (outdir / "odds_results.jsonl").exists() else []
+            # the grader measures a 5-session time-out: only plans at that horizon compare
             pred = pd.DataFrame([{"alert_id": d["alert_id"], "basis": d["basis"],
                                   "p_target_mc": d["p_target_mc"]} for d in done
-                                 if d["alert_id"] is not None])
+                                 if d["alert_id"] is not None
+                                 and d["horizon"] == GRADER_HOLD_1D])
             if pred.empty:
                 print(json.dumps({"n": 0, "note": "no stored odds yet"}))
                 return
@@ -435,14 +456,17 @@ async def _main(args: list[str]) -> None:
             m = pred.merge(await realized(s), on=["alert_id", "basis"])
             print(json.dumps(calibration(m), indent=1))
             return
+        if opt("--horizon") is None:
+            raise SystemExit("--horizon (sessions) is required: no silent default")
+        hz = int(opt("--horizon"))
         if "--alerts" in args:
             d = opt("--session")
-            plans = await alert_plans(s, _dt.date.fromisoformat(d) if d else None)
+            plans = await alert_plans(s, _dt.date.fromisoformat(d) if d else None, hz)
         else:
             key = opt("--key") or await resolve(ps, opt("--symbol"))
             plans = [Plan(key, _dt.date.fromisoformat(opt("--as-of")), float(opt("--entry")),
                           float(opt("--stop")), float(opt("--target")),
-                          int(opt("--horizon", 5)), int(opt("--qty")) if opt("--qty") else None,
+                          hz, int(opt("--qty")) if opt("--qty") else None,
                           opt("--symbol"))]
         res_all = []
         for i, pl in enumerate(plans):
