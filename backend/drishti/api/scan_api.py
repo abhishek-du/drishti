@@ -194,3 +194,26 @@ async def stats(since: _dt.date | None = None, until: _dt.date | None = None,
             "overall": pick(None), "by_detector": {d: pick(d) for d in DETECTORS},
             "note": "Small samples mean nothing: a few dozen trades cannot separate skill from "
                     "luck. Compare 'took' with 'placebo', not with zero."}
+
+
+@router.get("/api/radar")
+async def radar_list(date: _dt.date | None = None) -> dict:
+    """The Live Radar of one session (default: the latest with entries): stocks that newly met
+    Scout's criteria intraday (radar-v1), when, why, and the setup alerts found on them since."""
+    from drishti.scanner.radar import CAVEAT, CRITERIA, LABEL as RL, VERSION as RV
+    async with sessionmaker()() as s:
+        day = date or (await s.execute(text("select max(session_date) from radar_event"))).scalar()
+        rows = [] if day is None else (await s.execute(text("""
+            select r.id, r.session_date, r.bar_time, r.instrument_key, r.symbol, r.version,
+                   r.reason, r.criteria, r.metrics, r.created_at,
+                   (select count(*) from scan_alert a where a.instrument_key = r.instrument_key
+                      and a.session_date = r.session_date and a.tf = '15m'
+                      and a.bar_time >= r.bar_time) as alerts_since
+            from radar_event r where r.session_date = :d order by r.bar_time, r.id"""),
+            {"d": day})).mappings().all()
+        dates = [str(d) for d in (await s.execute(text("""select distinct session_date
+            from radar_event order by 1 desc limit 60"""))).scalars()]
+    return {"label": RL, "caveat": CAVEAT, "version": RV, "criteria": list(CRITERIA),
+            "session": _j(day), "dates": dates, "rows": [_row(r) for r in rows],
+            "note": "Bar time = start of the last closed 15m bar used (IST = UTC + 5:30). "
+                    "Separate from the EOD watchlist; Scout thresholds unchanged."}

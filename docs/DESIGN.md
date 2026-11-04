@@ -269,6 +269,33 @@ web/ (Next.js + lightweight-charts)   ops/ (runbooks + systemd user units)   doc
 
 **What stays:** `judge/dsr.py` as an EXPLORATORY helper; any future candidate must clear DSR/SPA at N≈30 (Hammer section above). This decision does not touch the decision-support scanner (user tool, not an edge claim).
 
+## Live Radar (user, 2026-11-04)
+
+**Label everywhere: "Intraday radar - decision support, not validated edge".** Part of the decision-support scanner. It does not change Scout `scout-b-v1`, the EOD watchlist, drishti-swing-v1 or any test.
+
+- **What it does (`drishti/scanner/radar.py`, `radar-v1`):** every 15 min, inside `scan_intraday`, it re-runs Scout's criteria with the PARAMS unchanged:
+  - price band;
+  - trend: close > SMA50 > SMA200, with SMA200 rising;
+  - RS in the top quantile;
+  - beats Nifty 500 over 3 months;
+  - close ≥ 0.85 × the 52-week high;
+  - ATR 2–6 %.
+- **Universe:** the liquid/F&O set, fixed for the day from T-1. It is the top 500 by 20-session traded value plus every eligible F&O stock (11-04: 500; the 213 eligible F&O names were all inside the top 500).
+- **Point in time:**
+  - History is the adjusted official 1d up to T-1.
+  - Today is a **partial daily bar** built only from data known when the last 15m bar closed. It uses the recorder's closed 1m bars, plus the day OHLC at the key's first tick if that tick came before the bar's close.
+  - Regime and price bands are T-1's.
+  - The RS cut is the 0.75 quantile over the top-500 set (Scout's spec universe).
+  - Parity with Scout's `screen()` is tested on the same bars.
+- **Output:**
+  - A stock that now passes, is not on the latest EOD watchlist and is not on today's radar yet gets one `radar_event` row (migration 0009, append-only). The row has the timestamp (the bar used), the trigger reason (the criteria that turned true since T-1) and the metrics.
+  - From then on `scan_intraday` watches it for setups. Its alerts carry `context.source = "radar"` plus the label and the caveat.
+  - New names are sent to Telegram, or logged.
+- **Rate budget:** no REST call. The live data comes from the recorder's WebSocket, which from 11-05 also subscribes the radar universe (Parquet 1m only; no live chart JSON for those keys). Ticks grow about 10× (≈0.3 GB/day zstd); the 10 GB disk guard still applies.
+- **API:** `GET /api/radar?date=` gives label, caveat, criteria and rows (with `alerts_since`). The UI tab is a Track C task.
+- **Caveat (DEVIATIONS D5):** setups on radar names use unadjusted 15m bars until the 15m path is adjusted (the re-point); the 11-20 switch alone does not fix it.
+- **Starts:** 11-04, with live bars only for the watchlist, so nothing can be added. The first full day is 11-05, after the recorder's 09:21 start with the new key list.
+
 ## Decision-support scanner + journal (user, 2026-11-03)
 
 **Label everywhere: "Decision support - detections are NOT validated edges. Your call. Paper only."**

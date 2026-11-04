@@ -28,13 +28,7 @@ def message(title: str, rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def alerts(s, ids: list[int], title: str) -> str:
-    if not ids:
-        return "nothing to send"
-    rows = [dict(r) for r in (await s.execute(text("""select symbol, instrument_key, detector,
-        tf, entry_ref, stop, r1, rr_r1, qty from scan_alert where id = any(:i)
-        order by detector, symbol"""), {"i": ids})).mappings()]
-    msg = message(title, rows)
+def send(msg: str) -> str:
     cfg = get_settings()
     if not (cfg.DRISHTI_TELEGRAM_BOT_TOKEN and cfg.DRISHTI_TELEGRAM_CHAT_ID):
         log.info("telegram not configured; message logged only:\n%s", msg)
@@ -45,3 +39,25 @@ async def alerts(s, ids: list[int], title: str) -> str:
         return "sent" if r.status_code == 200 else f"failed HTTP {r.status_code}"
     except httpx.HTTPError as e:                  # never echo the URL (it holds the token)
         return f"failed {type(e).__name__}"
+
+
+def radar(rows: list[dict], bar: str) -> str:
+    """New Live Radar names of one 15m pass (or nothing)."""
+    if not rows:
+        return "nothing to send"
+    from drishti.scanner.radar import CAVEAT, LABEL as RL
+    import pandas as pd
+    hm = pd.Timestamp(bar).tz_convert("Asia/Kolkata").strftime("%H:%M") if bar else "?"
+    lines = [f"Drishti Live Radar, 15m bar {hm} IST: {len(rows)} new", RL, ""]
+    lines += [f"{r['symbol'] or r['key']}: {', '.join(r['reason'])}" for r in rows[:30]]
+    lines += ["", CAVEAT]
+    return send("\n".join(lines))
+
+
+async def alerts(s, ids: list[int], title: str) -> str:
+    if not ids:
+        return "nothing to send"
+    rows = [dict(r) for r in (await s.execute(text("""select symbol, instrument_key, detector,
+        tf, entry_ref, stop, r1, rr_r1, qty from scan_alert where id = any(:i)
+        order by detector, symbol"""), {"i": ids})).mappings()]
+    return send(message(title, rows))

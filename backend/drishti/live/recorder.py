@@ -1,5 +1,7 @@
 """Live recorder: Upstox V3 market-data WebSocket, ONE connection, full mode, the current
-watchlist (<= 300 keys) + Nifty 50 / Nifty 500 / India VIX.
+watchlist (<= 300 keys) + Nifty 50 / Nifty 500 / India VIX, plus the Live Radar universe
+(top 500 liquid + F&O, ~600 keys; 1m bars to Parquet and the day OHLC at the first tick to
+day0.json; no live chart JSON for them).
 
 LIVE VIEW + tick archive only: nothing here is read by drishti-swing-v1, signals, Scout or the
 forward test. PAPER ONLY; no order path.
@@ -48,6 +50,7 @@ from drishti.live.candles import Builder
 AUTHORIZE = "https://api.upstox.com/v3/feed/market-data-feed/authorize"
 INDEX_KEYS = ("NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty 500", "NSE_INDEX|India VIX")
 MAX_KEYS = 300
+MAX_RADAR_KEYS = 1000            # one connection takes 2,000 keys (1,500 when both are used)
 LIVE_DIR = Path("/dev/shm/drishti_live")
 HEALTH = BACKEND / "var" / "run" / "live_health.json"
 STALE_S = 60
@@ -81,9 +84,14 @@ def _write_json(p: Path, obj) -> None:
 
 
 class Recorder:
-    def __init__(self, keys: list[str], until: _dt.datetime):
+    def __init__(self, keys: list[str], until: _dt.datetime, live_keys: set[str] | None = None):
+        """keys: everything subscribed; live_keys: the keys whose live 1m JSON is written for
+        the chart (the watchlist + indices; the Live Radar universe goes to Parquet only)."""
         cfg = get_settings()
         self.keys, self.until = keys, until
+        self.live_keys = None if live_keys is None else set(live_keys)   # None = every key
+        self.day0: dict[str, dict] = {}
+        self._day0_dirty = False
         self.ticks = store.TickWriter(cfg.DRISHTI_DATA_DIR / "ticks")
         self.bars_root = cfg.DRISHTI_DATA_DIR / "bars_1m"
         self.b = Builder()
@@ -114,10 +122,28 @@ class Recorder:
     def snapshot(self) -> None:
         LIVE_DIR.joinpath("c1m").mkdir(parents=True, exist_ok=True)
         _write_json(LIVE_DIR / "summary.json", {"label": LABEL, "updated_at": now().isoformat(),
-                                                "keys": self.b.summary()})
-        for k in self._changed:
+                                                "keys": {k: v for k, v in self.b.summary().items()
+                                                         if self.live_keys is None
+                                                         or k in self.live_keys}})
+        for k in (self._changed if self.live_keys is None else self._changed & self.live_keys):
             _write_json(LIVE_DIR / "c1m" / f"{quote(k, safe='')}.json", self.b.candles(k, 1))
         self._changed.clear()
+        if self._day0_dirty:
+            self.write_day0()
+
+    def write_day0(self) -> None:
+        """The day's OHLC at the first tick of each key (Live Radar: the 09:15 to first-tick
+        part of today's bar). Entries of an earlier recorder run today are kept (the earliest
+        seen_at wins), so a restart never moves a key's first look later."""
+        day = str(now().date())
+        old = {}
+        try:
+            old = {k: v for k, v in json.loads((LIVE_DIR / "day0.json").read_text()).items()
+                   if v.get("date") == day}
+        except (OSError, ValueError):
+            pass
+        _write_json(LIVE_DIR / "day0.json", {**self.day0, **old})
+        self._day0_dirty = False
 
     def flush_bars(self, final: bool = False) -> None:
         if final:
@@ -152,6 +178,14 @@ class Recorder:
                 lt = ff.ltpc
                 atp = getattr(ff, "atp", None) or None
                 vtt = getattr(ff, "vtt", None) if inner == "marketFF" else None
+                if k not in self.day0:
+                    d1 = next((o for o in ff.marketOHLC.ohlc if o.interval == "1d"), None)
+                    if d1 is not None and d1.open > 0:
+                        self.day0[k] = {"date": str(recv.date()), "open": d1.open,
+                                        "high": d1.high, "low": d1.low, "close": d1.close,
+                                        "volume": int(vtt) if vtt else int(d1.vol or 0),
+                                        "seen_at": recv.timestamp()}
+                        self._day0_dirty = True
             else:
                 continue
             self.b.tick(k, lt.ltp, lt.ltt, vtt, atp, lt.cp)
@@ -266,11 +300,25 @@ async def main(args: list[str]) -> int:
         keys = args[args.index("--keys") + 1].split(",") if "--keys" in args \
             else await watchlist_keys(s)
         keys = list(dict.fromkeys(keys[:MAX_KEYS] + list(INDEX_KEYS)))
+        live_keys = set(keys)
+        radar_n = 0
+        if "--keys" not in args and "--no-radar" not in args:
+            try:                                  # the Live Radar universe (Parquet only)
+                from drishti.core.db import prajna_sessionmaker
+                from drishti.scanner import radar
+                async with prajna_sessionmaker()() as ps:
+                    rk, _ = await radar.universe(s, ps, t.date())
+                rk = [k for k in rk if k not in live_keys][:MAX_RADAR_KEYS]
+                keys, radar_n = keys + rk, len(rk)
+            except Exception as e:                # the watchlist recording must not depend on it
+                print(json.dumps({"radar_universe_failed": f"{type(e).__name__}: {e}"[:300]}),
+                      file=sys.stderr)
         cfg = get_settings()
         gone = store.prune(cfg.DRISHTI_DATA_DIR / "ticks", t.date())
         rid = await runlog.start(s, "LIVE_RECORDER", t.date(),
-                                 {"keys": len(keys), "until": stop.isoformat(), "pruned": gone})
-        rec = Recorder(keys, stop)
+                                 {"keys": len(keys), "radar_keys": radar_n,
+                                  "until": stop.isoformat(), "pruned": gone})
+        rec = Recorder(keys, stop, live_keys)
         import signal
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):     # stop cleanly: flush bars, close ticks

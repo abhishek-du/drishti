@@ -223,14 +223,36 @@ async def scan_eod(s, ps, rid, day: _dt.date) -> dict:
             "alerts_new": len(ids), "alert_ids": ids}
 
 
+async def live_radar(s, ps, rid, t: _dt.datetime, last_closed: pd.Timestamp,
+                     wl: list[str]) -> tuple[dict, list[str]]:
+    """The Live Radar pass (scanner/radar.py) for the closed 15m bar, then today's radar keys.
+    A radar failure never stops the watchlist scan."""
+    from drishti.scanner import radar
+    out: dict = {"label": radar.LABEL}
+    try:
+        keys, _ = await radar.universe(s, ps, t.date())
+        out["flushed"] = radar.wait_for_flush(t.date(), last_closed + pd.Timedelta(minutes=15))
+        m1 = parquet_1m(keys, t.date())
+        out.update(await radar.step(s, ps, rid, t.date(), last_closed, m1, set(wl)))
+    except Exception as e:
+        await s.rollback()
+        out["failed"] = f"{type(e).__name__}: {e}"[:300]
+    return out, await radar.todays_keys(s, t.date())
+
+
 async def scan_intraday(s, ps, rid, t: _dt.datetime) -> dict:
-    keys = await watchlist(s)
+    wl = await watchlist(s)
+    last_closed = _bucket15(pd.Series([pd.Timestamp(t)])).iloc[0] - pd.Timedelta(minutes=15)
+    radar_out, radar_keys = await live_radar(s, ps, rid, t, last_closed, wl)
+    keys = wl + [k for k in radar_keys if k not in set(wl)]
     df15 = await bars15(ps, keys, t.date() - _dt.timedelta(days=25))
     if df15.empty:
-        return {"skipped": "no 15m bars"}
-    last_closed = _bucket15(pd.Series([pd.Timestamp(t)])).iloc[0] - pd.Timedelta(minutes=15)
+        return {"skipped": "no 15m bars", "radar": radar_out}
     syms = {k: a.get("trading_symbol") for k, a in (await master.state(s)).items()}
     base = await _context(s, t.date())
+    from drishti.scanner.radar import CAVEAT, LABEL as RADAR_LABEL
+    src = {k: "watchlist" for k in wl}
+    src.update({k: "radar" for k in radar_keys if k not in src})
     ids, n_hits = [], {}
     for k, g in df15.groupby("instrument_key", sort=False):
         g = g[g.t <= last_closed]
@@ -239,14 +261,18 @@ async def scan_intraday(s, ps, rid, t: _dt.datetime) -> dict:
         df = detect.prepare(g[["open", "high", "low", "close", "volume"]])
         hs = detect.hits(df)
         if hs:
+            extra = {"source": src.get(k)} if src.get(k) != "radar" else \
+                {"source": "radar", "radar_label": RADAR_LABEL, "caveat": CAVEAT}
             ids += await store_hits(s, rid, t.date(), "15m", last_closed.to_pydatetime(), k,
-                                    syms.get(k), hs, _ctx_row(df, base),
+                                    syms.get(k), hs, {**_ctx_row(df, base), **extra},
                                     [x.isoformat() for x in g.t])
             for h in hs:
                 n_hits[h["detector"]] = n_hits.get(h["detector"], 0) + 1
     await s.commit()
-    return {"bar": last_closed.isoformat(), "keys": len(keys), "hits": n_hits,
-            "alerts_new": len(ids), "alert_ids": ids}
+    return {"bar": last_closed.isoformat(), "keys": len(keys), "watchlist": len(wl),
+            "radar_keys": len(radar_keys), "hits": n_hits, "alerts_new": len(ids),
+            "alert_ids": ids, "radar": {k: v for k, v in radar_out.items() if k != "rows"},
+            "radar_new": radar_out.get("rows", [])}
 
 
 # ---- grading ----------------------------------------------------------------------------
@@ -326,6 +352,7 @@ async def main(cmd: str, args: list[str]) -> dict:
             elif cmd == "scan_intraday":
                 out = await scan_intraday(s, ps, rid, t)
                 out["telegram"] = await notify.alerts(s, out.pop("alert_ids", []), "Intraday 15m")
+                out["telegram_radar"] = notify.radar(out.get("radar_new", []), out.get("bar", ""))
             elif cmd == "scan_grade":
                 out = await scan_grade(s, ps, rid)
             else:

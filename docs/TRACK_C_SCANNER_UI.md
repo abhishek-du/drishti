@@ -69,3 +69,21 @@ Next.js calls the API through the existing proxy/fetch helper used by the chart 
 - Accept: on `/scanner/21` (LALPATHLAB) the only bands shown by default are 1960.49–1991.41 (R1) and 2017.64–2048.56 (R2).
 
 **Show the caveat (DEVIATIONS D5):** on 15m alerts, a small note: "Intraday levels use unadjusted 15m bars: unreliable for stocks with a split or bonus in the last ~25 days."
+
+
+## Next task: the Live Radar tab (2026-11-04)
+
+**Backend:** `GET /api/radar?date=YYYY-MM-DD`. It returns:
+- `label`: "Intraday radar - decision support, not validated edge";
+- `caveat`, `version`, `criteria` (6 names), `session`, `dates`, `note`;
+- `rows[]`, each with `id, bar_time` (start of the 15m bar used, UTC), `instrument_key, symbol`, `reason` (the criteria that turned true since T-1, or `met_at_T-1_not_on_watchlist`), `criteria {name: {t1, now}}`, `metrics {close, sma50, sma200, hi52, atr_pct, ret63, rs_score, rs_cut, dist_52w_high_pct, volume}`, `created_at`, and `alerts_since` (the 15m setup alerts on the name since it was added).
+
+**Screen: `/radar`, nav item "Live Radar"**, separate from the EOD watchlist.
+- Show the label and the caveat at the top, verbatim from the API.
+- Date picker from `dates`. During 09:15–15:35 IST, refetch every 60 s.
+- Table, newest first: time added (IST), symbol (links to the chart page), reason chips, RS score vs cut, % below the 52-week high, ATR %, close vs SMA50/200, and alerts since (links to `/scanner?date=…&tf=15m` filtered to the symbol).
+- Row expand: the criteria grid (T-1 → now, ✓/✗ for each of the 6).
+- On `/scanner`, an alert with `context.source == "radar"` gets a small "Radar" badge and its `context.caveat` in the tooltip.
+- Empty state: "No stock newly met the criteria today".
+
+**Accept:** build passes; label + caveat visible (light + dark); 390 px width OK.
