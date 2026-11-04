@@ -203,3 +203,24 @@ def test_mixed_15m_sources_give_a_datetime_column():
     out = utc_t(pd.concat([pj, own]))
     assert str(out.t.dtype) == "datetime64[ns, UTC]" or str(out.t.dtype).startswith("datetime64")
     assert out.t.dt.tz_convert("Asia/Kolkata").dt.hour.tolist() == [9, 9]
+
+
+def test_eod_as_of_and_zone_dates_are_point_in_time():
+    import datetime as dt
+    from drishti.core.clock import IST
+    from drishti.scanner.run import eod_as_of
+    live = dt.datetime(2026, 11, 3, 19, 45, 5, tzinfo=IST)
+    assert eod_as_of(dt.date(2026, 11, 3), live) == live            # the live run: now
+    later = dt.datetime(2026, 11, 4, 12, 0, tzinfo=IST)
+    assert eod_as_of(dt.date(2026, 11, 2), later) == dt.datetime(2026, 11, 2, 19, 45, tzinfo=IST)
+    # future bars never change a hit: the frame ends at the detection bar
+    b = _trend(320, 5)
+    t = 300
+    h1 = detect.hits(detect.prepare(b.iloc[:t + 1]))
+    b2 = b.copy()
+    b2.loc[t + 1:, ["high", "low", "close", "open"]] *= 3.0          # a wild future
+    h2 = detect.hits(detect.prepare(b2.iloc[:t + 1]))
+    assert h1 == h2
+    for h in h1:
+        for z in h["zones_used"].values():
+            assert z["last"] + 5 <= t                                 # pivots confirmed by t

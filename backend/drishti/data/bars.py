@@ -110,10 +110,12 @@ async def provisional(s, day: _dt.date) -> pd.DataFrame:
     return df
 
 
-async def daily(s, ps, day: _dt.date, days: int = 450) -> tuple[pd.DataFrame, str]:
+async def daily(s, ps, day: _dt.date, days: int = 450, as_of: _dt.datetime | None = None
+                ) -> tuple[pd.DataFrame, str]:
     """Bars up to `day`: official where Prajna has `day`, else official < day + provisional of
-    day. Returns (bars, bar_source of day)."""
-    off = await official(ps, day, days)
+    day. Returns (bars, bar_source of day). `as_of` (default now) limits the official bars and
+    the CA factors to what was knowable then (a re-run for a past day)."""
+    off = await official(ps, day, days, as_of=as_of)
     if (off.session_date == day).sum() > 0.5 * off.instrument_key.nunique():
         return off, "official"
     prov = await provisional(s, day)

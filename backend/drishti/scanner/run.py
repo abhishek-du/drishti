@@ -155,11 +155,18 @@ async def _context(s, day: _dt.date) -> dict:
 
 
 async def store_hits(s, rid, day, tf: str, bar_time, key: str, sym, hs: list[dict],
-                     ctx: dict) -> list[int]:
+                     ctx: dict, stamps: list | None = None) -> list[int]:
+    """`stamps`: the bar date/time of each row of the frame the hits came from, so the context
+    records the dates of the zone pivots (audit: every pivot is <= the alert's bar)."""
     cfg = get_settings()
     ids = []
     for h in hs:
         z = detect.size(h, cfg.DRISHTI_SCAN_CAPITAL, cfg.DRISHTI_SCAN_RISK_PCT)
+        zu = {n: {**v, "first": stamps[v["first"]], "last": stamps[v["last"]],
+                  "confirmed": stamps[min(v["last"] + 5, len(stamps) - 1)]}
+              for n, v in h.get("zones_used", {}).items()
+              if v.get("first") is not None} if stamps is not None else {}
+        hctx = {**ctx, "zones_used": zu}
         i = (await s.execute(text("""insert into scan_alert(run_id, session_date, tf, bar_time,
             instrument_key, symbol, detector, version, entry_ref, stop, r1, r2, rr_r1, qty,
             capital, risk_pct, cost_r, atr, context) values (:r, :d, :tf, :bt, :k, :sym, :det,
@@ -169,7 +176,7 @@ async def store_hits(s, rid, day, tf: str, bar_time, key: str, sym, hs: list[dic
              "det": z["detector"], "v": detect.VERSION, "e": z["entry_ref"], "st": z["stop"],
              "r1": z["r1"], "r2": z["r2"], "rr": z["rr_r1"], "q": z["qty"],
              "cap": cfg.DRISHTI_SCAN_CAPITAL, "rp": cfg.DRISHTI_SCAN_RISK_PCT,
-             "cr": z["cost_r"], "atr": z["atr"], "ctx": json.dumps(ctx, default=str)})).first()
+             "cr": z["cost_r"], "atr": z["atr"], "ctx": json.dumps(hctx, default=str)})).first()
         if i:
             ids.append(i[0])
     return ids
@@ -185,11 +192,19 @@ def _ctx_row(df: pd.DataFrame, base: dict) -> dict:
             "flags": [f for f in ("hammer", "engulfing_bull", "morning_star") if bool(r[f])]}
 
 
+def eod_as_of(day: _dt.date, t: _dt.datetime) -> _dt.datetime:
+    """What the 19:45 scan of `day` could know: now for the live run, else 19:45 IST of `day`
+    (a re-run for a past day must not use bars or CA factors that became known later)."""
+    return t if t.astimezone(IST).date() <= day else _dt.datetime.combine(day, _dt.time(19, 45), IST)
+
+
 async def scan_eod(s, ps, rid, day: _dt.date) -> dict:
-    b, source = await bars.daily(s, ps, day)
+    as_of = eod_as_of(day, now())
+    b, source = await bars.daily(s, ps, day, as_of=as_of)
     keys = await eligible(s, b, day)
     syms = {k: a.get("trading_symbol") for k, a in (await master.state(s)).items()}
-    base = {**(await _context(s, day)), "bar_source": source}
+    base = {**(await _context(s, day)), "bar_source": source, "as_of": as_of.isoformat(),
+            "last_bar": str(day)}
     n_hits, ids = {}, []
     sub = b[b.instrument_key.isin(keys)]
     for k, g in sub.groupby("instrument_key", sort=False):
@@ -198,7 +213,9 @@ async def scan_eod(s, ps, rid, day: _dt.date) -> dict:
         if not hs:
             continue
         bt = _dt.datetime.combine(day, _dt.time(15, 30), IST)
-        ids += await store_hits(s, rid, day, "1d", bt, k, syms.get(k), hs, _ctx_row(df, base))
+        assert g.session_date.max() <= day                      # point in time
+        ids += await store_hits(s, rid, day, "1d", bt, k, syms.get(k), hs, _ctx_row(df, base),
+                                [str(d) for d in g.session_date])
         for h in hs:
             n_hits[h["detector"]] = n_hits.get(h["detector"], 0) + 1
     await s.commit()
@@ -223,7 +240,8 @@ async def scan_intraday(s, ps, rid, t: _dt.datetime) -> dict:
         hs = detect.hits(df)
         if hs:
             ids += await store_hits(s, rid, t.date(), "15m", last_closed.to_pydatetime(), k,
-                                    syms.get(k), hs, _ctx_row(df, base))
+                                    syms.get(k), hs, _ctx_row(df, base),
+                                    [x.isoformat() for x in g.t])
             for h in hs:
                 n_hits[h["detector"]] = n_hits.get(h["detector"], 0) + 1
     await s.commit()

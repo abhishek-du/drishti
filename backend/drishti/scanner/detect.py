@@ -81,7 +81,9 @@ def levels_for(detector: str, high_t: float, low_ref: float, atr: float, zs: lis
     r2 = z2["bottom"] if z2 else None
     risk = entry - stop
     return {"detector": detector, "entry_ref": entry, "stop": stop, "r1": r1, "r2": r2,
-            "rr_r1": (r1 - entry) / risk if r1 and risk > 0 else None, "atr": atr}
+            "rr_r1": (r1 - entry) / risk if r1 and risk > 0 else None, "atr": atr,
+            "zones_used": {n: {k: z.get(k) for k in ("bottom", "top", "touches", "first", "last")}
+                           for n, z in (("r1", z1), ("r2", z2)) if z}}
 
 
 def size(h: dict, capital: float, risk_pct: float) -> dict:

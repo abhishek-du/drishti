@@ -158,7 +158,10 @@ async def stats(since: _dt.date | None = None, until: _dt.date | None = None,
       alerts    every alert that filled (the base rate of the detectors)
       placebo   every alert, seeded random entry in the next bar's range, same stop/target
     """
-    since = since or _dt.date(2026, 11, 1)
+    # 2026-11-03 = the first live (cron) EOD scan; the 11-02 batch was a one-off re-run on 11-03
+    # with the official bar of 11-02 (not knowable at 19:45 on 11-02; 1 of its 14 alerts would
+    # not have fired live), so it is left out by default
+    since = since or _dt.date(2026, 11, 3)
     until = until or today()
     async with sessionmaker()() as s:
         rows = (await s.execute(text(f"""select a.id, a.detector, o.basis, o.outcome, o.r_net,
