@@ -23,25 +23,32 @@ export type BarsData = {
           dir: "bull" | "bear" | "flat"; confirm: string | null; follow: string | null }[];
   lines: Record<string, Pt[]>; panes: Record<string, Pt[]>;
   candles: { time: string | number; flags: string[] }[]; bullish_flags: string[];
+  markers?: { label: string; note: string; items: { time: string | number; kind: "bull" | "bear" | "caution"; flags: string[]; stop: number | null }[] };
   zones: { price: number; bottom: number; top: number; touches: number }[];
   trend: "UP" | "DOWN" | "SIDE";
+  trend_detail: { class: "UP" | "DOWN" | "SIDE"; ma_trend: "UP" | "DOWN" | "FLAT"; text: string; note: string;
+                  conditions: { name: string; ok: boolean; text: string }[] };
   last: { ema20: number | null; sma50: number | null; vwap: number | null; rsi: number | null; atr: number | null; close: number | null };
   bias: { label: string; text: string; rules: { rule: string; state: unknown; text: string }[] };
 };
 type CType = "candle_solid" | "candle_stroke" | "ohlc" | "line" | "area" | "ha";
 const CTYPES: [CType, string][] = [["candle_solid", "Candles"], ["candle_stroke", "Hollow candles"], ["ohlc", "Bars"], ["line", "Line"], ["area", "Area"], ["ha", "Heikin Ashi"]];
 type Scale = "normal" | "logarithm" | "percentage";
-type Layers = { zones: boolean; patterns: "bullish" | "all" | "off"; trend: boolean; signals: boolean; antiWhipsaw: boolean };
+type Layers = { zones: boolean; patterns: "bullish" | "all" | "off"; trend: boolean; signals: boolean };
 type Magnet = "normal" | "weak_magnet" | "strong_magnet";
 
 export const ts = (t: string | number) => (typeof t === "number" ? t * 1000 : Date.parse(`${t}T00:00:00+05:30`));
+const STOP_BARS = 10;   // a pattern marker's stop line runs this many bars to the right
 const LS = { ind: "drishti.chart.ind.v1", ctype: "drishti.chart.ctype", scale: "drishti.chart.scale", layers: "drishti.chart.layers", theme: "drishti.theme.v1", magnet: "drishti.chart.magnet" };
 function ls<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); return v ? (JSON.parse(v) as T) : d; } catch { return d; } }
 function lsSet(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked */ } }
 const qs = (o: Record<string, string | number | boolean>) => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&");
 
-export default function KChart({ instrumentKey, tf, setTf, onData }: {
-  instrumentKey: string; tf: Tf; setTf: (t: Tf) => void; onData: (d: BarsData | null) => void;
+/** Scanner alert levels drawn on the chart (entry blue, stop red, R1/R2 green dashed, marker on bar_time). */
+export type AlertLevels = { entry: number; stop: number; r1: number | null; r2: number | null; barTime: string; tf: "1d" | "15m" };
+
+export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
+  instrumentKey: string; tf: Tf; setTf: (t: Tf) => void; onData: (d: BarsData | null) => void; levels?: AlertLevels;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -54,7 +61,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const [err, setErr] = useState("");
   const [ctype, setCtype] = useState<CType>("candle_solid");
   const [scale, setScale] = useState<Scale>("normal");
-  const [layers, setLayers] = useState<Layers>({ zones: true, patterns: "bullish", trend: true, signals: true, antiWhipsaw: true });
+  const [layers, setLayers] = useState<Layers>({ zones: true, patterns: "bullish", trend: true, signals: true });
   const [inds, setInds] = useState<Instance[]>(DEFAULT_SET);
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [magnet, setMagnet] = useState<Magnet>("weak_magnet");
@@ -76,9 +83,11 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   // preferences (per browser)
   useEffect(() => {
     setCtype(ls(LS.ctype, "candle_solid")); setScale(ls(LS.scale, "normal")); setInds(ls(LS.ind, DEFAULT_SET));
-    setLayers({ zones: true, patterns: "bullish", trend: true, signals: true, antiWhipsaw: true, ...ls(LS.layers, {}) }); setMagnet(ls(LS.magnet, "weak_magnet"));
-    const savedTheme = ls<"light" | "dark" | null>(LS.theme, null);
-    setTheme(savedTheme || "dark");
+    setLayers({ zones: true, patterns: "bullish", trend: true, signals: true, ...ls(LS.layers, {}) }); setMagnet(ls(LS.magnet, "weak_magnet"));
+    // the theme key is shared with ThemeToggle, which stores the plain string (not JSON)
+    let savedTheme: string | null = null;
+    try { savedTheme = localStorage.getItem(LS.theme)?.replace(/"/g, "") ?? null; } catch { /* storage blocked */ }
+    setTheme(savedTheme === "light" ? "light" : "dark");
     setReady(true);
   }, []);
   useEffect(() => { if (ready) document.documentElement.setAttribute("data-theme", theme); }, [theme, ready]);
@@ -168,6 +177,25 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
     c.resetData();
   }, [d]);
 
+  // scanner alert levels (only when a page passes them)
+  useEffect(() => {
+    const c = chart.current;
+    if (!c || !d || !bars.current.length) return;
+    c.removeOverlay({ groupId: "alert" });
+    if (!levels) return;
+    const t1 = bars.current[bars.current.length - 1].timestamp;
+    const line = (value: number, label: string, color: string, dashed: boolean) => ({ name: "d_level", groupId: "alert", lock: true,
+      extendData: { label: `${label} ${value.toFixed(2)}`, color, dashed }, points: [{ timestamp: t1, value }] }) as OverlayCreate;
+    const ov: OverlayCreate[] = [line(levels.entry, "Entry", "#3a86ff", false), line(levels.stop, "Stop", "#e03131", false)];
+    if (levels.r1 !== null) ov.push(line(levels.r1, "R1", "#2f9e44", true));
+    if (levels.r2 !== null) ov.push(line(levels.r2, "R2", "#2f9e44", true));
+    // the alert bar: 1d bars are keyed by the IST date, intraday bars by their start time
+    const at = levels.tf === "1d" ? ts(new Date(levels.barTime).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })) : Date.parse(levels.barTime);
+    const bar = bars.current.find((k) => k.timestamp === at);
+    if (bar && (levels.tf === d.tf)) ov.push({ name: "d_mark", groupId: "alert", lock: true, extendData: "alert", points: [{ timestamp: at, value: bar.high }] } as OverlayCreate);
+    c.createOverlay(ov);
+  }, [d, levels]);
+
   // Drishti layers
   useEffect(() => {
     const c = chart.current;
@@ -175,80 +203,33 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
     c.removeOverlay({ groupId: "drishti" });
     const t0 = bars.current[0].timestamp, t1 = bars.current[bars.current.length - 1].timestamp;
     const ov: OverlayCreate[] = [];
-    if (layers.zones) d.zones.forEach((z) => ov.push({ name: "d_zone", groupId: "drishti", lock: true, extendData: `S/R zone ×${z.touches} · ${z.price.toFixed(2)}`, points: [{ timestamp: t0, value: z.top }, { timestamp: t1, value: z.bottom }] }));
+    if (layers.zones && d.zones.length) ov.push({ name: "d_zones", groupId: "drishti", lock: true,
+      extendData: d.zones.map((z) => ({ top: z.top, bottom: z.bottom, label: `S/R ×${z.touches} · ${z.price.toFixed(2)}` })),
+      points: [{ timestamp: t0, value: d.zones[0].price }] });
     if (layers.patterns !== "off") {
       const bull = new Set(d.bullish_flags);
       const low = new Map(d.bars.map((b) => [ts(b.time), b.low]));
       d.candles.forEach((m) => {
         const fl = layers.patterns === "all" ? m.flags : m.flags.filter((f) => bull.has(f));
-        if (fl.length) ov.push({ name: "d_pat", groupId: "drishti", lock: true, extendData: { text: fl.join(", "), bull: fl.some((f) => bull.has(f)) }, points: [{ timestamp: ts(m.time), value: low.get(ts(m.time)) }] });
+        if (fl.length) ov.push({ name: "d_pat", groupId: "drishti", lock: true, extendData: { bull: fl.some((f) => bull.has(f)) }, points: [{ timestamp: ts(m.time), value: low.get(ts(m.time)) }] });
       });
     }
-    if (layers.signals) {
-      const high = new Map(d.bars.map((b) => [ts(b.time), b.high]));
-      const low = new Map(d.bars.map((b) => [ts(b.time), b.low]));
-      const emaMap = new Map((d.lines?.ema20 ?? []).map((pt) => [ts(pt.time), pt.value]));
-      const n = d.bars.length;
-      const sigs = new Map<number, { text: string; side: "BUY" | "SELL"; isFollow: boolean }>();
-      let lastSide: "BUY" | "SELL" | null = null;
-
-      for (let i = 0; i < n; i++) {
-        const b = d.bars[i];
-        if (b.confirm === "confirmed" && i + 1 < n) {
-          const nextBar = d.bars[i + 1];
-          const t1 = ts(nextBar.time);
-          const c1 = nextBar.close;
-          const ema1 = emaMap.get(t1);
-
-          if (b.dir === "bull") {
-            // Trend-aligned Buy: Close >= EMA20 (or at support zone bounce)
-            const atSupport = d.zones?.some((z) => nextBar.low <= z.top * 1.005 && c1 >= z.bottom * 0.995);
-            const trendOk = !layers.antiWhipsaw || ema1 == null || c1 >= ema1 * 0.995 || atSupport;
-
-            if (trendOk && lastSide !== "BUY") {
-              sigs.set(t1, { text: "BUY", side: "BUY", isFollow: false });
-              lastSide = "BUY";
-
-              if (b.follow === "follow-through" && i + 2 < n) {
-                const follBar = d.bars[i + 2];
-                const t2 = ts(follBar.time);
-                const ema2 = emaMap.get(t2);
-                if (!layers.antiWhipsaw || ema2 == null || follBar.close >= ema2 * 0.995) {
-                  sigs.set(t2, { text: "BUY FT", side: "BUY", isFollow: true });
-                }
-              }
-            }
-          } else if (b.dir === "bear") {
-            // Trend-aligned Sell: Close <= EMA20 (or resistance rejection)
-            const atResistance = d.zones?.some((z) => nextBar.high >= z.bottom * 0.995 && c1 <= z.top * 1.005);
-            const trendOk = !layers.antiWhipsaw || ema1 == null || c1 <= ema1 * 1.005 || atResistance;
-
-            if (trendOk && lastSide !== "SELL") {
-              sigs.set(t1, { text: "SELL", side: "SELL", isFollow: false });
-              lastSide = "SELL";
-
-              if (b.follow === "follow-through" && i + 2 < n) {
-                const follBar = d.bars[i + 2];
-                const t2 = ts(follBar.time);
-                const ema2 = emaMap.get(t2);
-                if (!layers.antiWhipsaw || ema2 == null || follBar.close <= ema2 * 1.005) {
-                  sigs.set(t2, { text: "SELL FT", side: "SELL", isFollow: true });
-                }
-              }
-            }
-          }
+    if (layers.signals && d.markers) {
+      // server-side, causal pattern markers (no repaint): bull = pattern label + a stop line at
+      // the signal bar's low; bear = pattern label; 'caution' = a bear pattern in an uptrend,
+      // shown only as a faint note. Not trade signals: the scanner alerts are.
+      const idx = new Map(d.bars.map((b, i) => [ts(b.time), i]));
+      d.markers.items.forEach((m) => {
+        const t = ts(m.time), i = idx.get(t);
+        if (i === undefined) return;
+        const b = d.bars[i], name = m.flags.join(" + ").replace(/_/g, " ");
+        ov.push({ name: "d_signal", groupId: "drishti", lock: true, extendData: { text: name, kind: m.kind },
+          points: [{ timestamp: t, value: m.kind === "bull" ? b.low : b.high }] });
+        if (m.kind === "bull" && m.stop !== null) {
+          const end = d.bars[Math.min(i + STOP_BARS, d.bars.length - 1)];
+          ov.push({ name: "d_stop", groupId: "drishti", lock: true, extendData: `stop ${m.stop.toFixed(2)}`,
+            points: [{ timestamp: t, value: m.stop }, { timestamp: ts(end.time), value: m.stop }] });
         }
-      }
-
-      sigs.forEach((s, t) => {
-        const isBuy = s.side === "BUY";
-        ov.push({
-          name: "d_signal",
-          groupId: "drishti",
-          lock: true,
-          extendData: s,
-          points: [{ timestamp: t, value: isBuy ? low.get(t) : high.get(t) }],
-        });
       });
     }
     if (ov.length) c.createOverlay(ov);
@@ -458,7 +439,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
   const setLayersP = (l: Layers) => { setLayers(l); lsSet(LS.layers, l); };
   const setThemeP = (t: "light" | "dark") => {
     setTheme(t);
-    lsSet(LS.theme, t);
+    try { localStorage.setItem(LS.theme, t); } catch { /* storage blocked */ }   // plain string, as ThemeToggle
     document.documentElement.setAttribute("data-theme", t);
     window.dispatchEvent(new CustomEvent("drishti:theme", { detail: t }));
   };
@@ -505,16 +486,14 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
           <label className="tog"><input type="checkbox" checked={layers.zones} onChange={(e) => setLayersP({ ...layers, zones: e.target.checked })} />S/R zones</label>
           <label className="tog">Candle patterns <select value={layers.patterns} onChange={(e) => setLayersP({ ...layers, patterns: e.target.value as Layers["patterns"] })}><option value="bullish">trigger flags</option><option value="all">all 26</option><option value="off">off</option></select></label>
           <label className="tog"><input type="checkbox" checked={layers.trend} onChange={(e) => setLayersP({ ...layers, trend: e.target.checked })} />Trend badges</label>
-          <label className="tog"><input type="checkbox" checked={layers.signals} onChange={(e) => setLayersP({ ...layers, signals: e.target.checked })} />Buy / Sell Signals (Confirmed &amp; Follow-Through)</label>
-          {layers.signals && (
-            <label className="tog" style={{ paddingLeft: 16, fontSize: 12 }}>
-              <input type="checkbox" checked={layers.antiWhipsaw} onChange={(e) => setLayersP({ ...layers, antiWhipsaw: e.target.checked })} />
-              Anti-Whipsaw Filter (EMA20 &amp; S/R Confluence)
-            </label>
-          )}
-          <span className="muted small">Signals / entry / SL / target lines: later (with P3).</span>
+          <label className="tog"><input type="checkbox" checked={layers.signals} onChange={(e) => setLayersP({ ...layers, signals: e.target.checked })} />Pattern markers (▲ bull + stop · ▼ bear · faint caution)</label>
+          <span className="muted small">Pattern - not a prediction; not used by drishti-swing-v1. Actionable items are the Scanner alerts.</span>
           <button onClick={() => setMenu("")}>Close</button>
         </div>
+      )}
+      {layers.trend && d && <TrendStrip d={d} live={live} />}
+      {layers.signals && d?.markers && d.markers.items.length > 0 && (
+        <div className="kc-mknote" role="note">▲▼ {d.markers.label}. Actionable: <a href="/scanner">Scanner alerts</a> (entry / stop / R1 / R2), not these markers.</div>
       )}
       <div className="kc-body">
         <div className="kc-tools" role="toolbar" aria-label="Drawing tools">
@@ -537,15 +516,11 @@ export default function KChart({ instrumentKey, tf, setTf, onData }: {
               O <b>{fmt(lb.open)}</b> H <b>{fmt(lb.high)}</b> L <b>{fmt(lb.low)}</b> C <b>{fmt(lb.close)}</b>{" "}
               <span style={{ color: (chg ?? 0) >= 0 ? "var(--up)" : "var(--down)" }}>{chg === null || !prev ? "" : `${chg >= 0 ? "+" : ""}${fmt(chg)} (${fmt((100 * chg) / prev.close)}%)`}</span>{" "}
               <span className="muted">Vol {(lb.volume ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
+              {(() => { const f = d.candles.find((m) => ts(m.time) === lb.timestamp)?.flags; return f?.length ? <span className="kc-legend-pat"> ▲ {f.join(", ")}</span> : null; })()}
             </div>
           )}
           {cardOpen && hover && lb && d && <BarCard d={d} k={lb} prev={prev} when={when} x={hover.x} width={box.current?.clientWidth ?? 0} live={live}
             inds={chart.current?.getIndicators() ?? []} i={li} />}
-          {layers.trend && d && (
-            <div className={`kc-trend pill ${d.trend === "UP" ? "on" : d.trend === "DOWN" ? "off" : ""}`} title="Spec section 3 trend rule">
-              Trend {d.tf}: {d.trend}{live ? " · live view" : ""}
-            </div>
-          )}
           {live && <span className="pill warn kc-livetag">{LIVE_LABEL}</span>}
           {pending && (
             <div className="kc-hint">
@@ -611,6 +586,35 @@ function BarCard({ d, k, prev, when, x, width, live, inds, i }: {
         </>}
       </tbody></table>
       <div className="muted small" style={{ marginTop: 4 }}>Next candle / candle after: what later candles did (hindsight). NOT a prediction; not used by drishti-swing-v1.</div>
+    </div>
+  );
+}
+
+// spec trend (levels.trend) with its reasons, and the MA-only trend; decision support only
+function TrendStrip({ d, live }: { d: BarsData; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const t = d.trend_detail;
+  const cls = (v: string) => (v === "UP" ? "on" : v === "DOWN" ? "off" : "");
+  return (
+    <div className="kc-status">
+      <span className="kc-why" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+        <button className={`pill ${cls(t.class)}`} onClick={() => setOpen(!open)} aria-expanded={open}
+          title="Spec section 3 trend rule (levels.trend): click or hover for the reason">
+          Spec trend {d.tf}: <b>{t.class}</b> ⓘ
+        </button>
+        {open && (
+          <div className="kc-why-pop" role="tooltip">
+            <b>Spec trend {d.tf}: {t.class}</b>
+            <div className="muted small">UP needs all three; DOWN needs the mirror (spec §3, unchanged).</div>
+            <ul>{t.conditions.map((c) => <li key={c.name} className={c.ok ? "ok" : "no"}>{c.text}</li>)}</ul>
+            <div className="muted small">{t.note}{live ? " · LIVE VIEW" : ""}</div>
+          </div>
+        )}
+      </span>
+      <span className={`pill ${cls(t.ma_trend)}`} title="close vs SMA50 vs SMA200 only (more responsive than the spec rule); not used by drishti-swing-v1">
+        MA trend: <b>{t.ma_trend}</b>
+      </span>
+      <span className="muted kc-status-note">not used by drishti-swing-v1{live ? " · LIVE VIEW" : ""}</span>
     </div>
   );
 }

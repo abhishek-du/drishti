@@ -1,5 +1,5 @@
 // Drawing tools (built-in KLineChart overlays plus a few of our own) and the Drishti layers.
-import { OverlayTemplate, registerOverlay } from "klinecharts";
+import { OverlayFigure, OverlayTemplate, registerOverlay } from "klinecharts";
 
 export type Tool = { name: string; label: string; icon: string; key?: string };
 export const TOOLS: Tool[] = [
@@ -60,59 +60,104 @@ const note: OverlayTemplate = {
   }],
 };
 
-// Drishti S/R zone: a band across the whole width (points: top, bottom; label in extendData)
-const zone: OverlayTemplate = {
-  name: "d_zone", totalStep: 3, lock: true, needDefaultPointFigure: false,
-  createPointFigures: ({ coordinates, bounding, overlay }) => {
+// Drishti S/R zones, all in one overlay so the labels can be laid out together: bands across the
+// whole width; a label is skipped when it would sit within LABEL_GAP px of one already drawn or
+// outside the pane (extendData: [{top, bottom, label}])
+const LABEL_GAP = 15;
+const zones: OverlayTemplate = {
+  name: "d_zones", totalStep: 2, lock: true, needDefaultPointFigure: false,
+  createPointFigures: ({ bounding, overlay, yAxis }) => {
+    if (!yAxis) return [];
+    const zs = (overlay.extendData ?? []) as { top: number; bottom: number; label: string }[];
+    const bands = zs.map((z) => {
+      const a = yAxis.convertToPixel(z.top), b = yAxis.convertToPixel(z.bottom);
+      return { y0: Math.min(a, b), y1: Math.max(a, b), label: z.label };
+    });
+    const figs: OverlayFigure[] = bands.map((z) => ({ type: "rect", ignoreEvent: true,
+      attrs: { x: 0, y: z.y0, width: bounding.width, height: Math.max(1, z.y1 - z.y0) }, styles: { style: "fill", color: "rgba(120,120,140,.14)" } }));
+    let last = -Infinity;
+    [...bands].sort((p, q) => p.y0 - q.y0).forEach((z) => {
+      if (z.y0 < 14 || z.y0 > bounding.height - 4 || z.y0 - last < LABEL_GAP) return;
+      last = z.y0;
+      figs.push({ type: "text", ignoreEvent: true, attrs: { x: 4, y: z.y0, text: z.label, align: "left", baseline: "bottom" },
+        styles: { color: "#8a94a6", backgroundColor: "rgba(15,17,21,.55)", size: 10, paddingLeft: 3, paddingRight: 3, paddingTop: 1, paddingBottom: 1, borderRadius: 2 } });
+    });
+    return figs;
+  },
+};
+
+// Drishti candle-pattern marker under a bar (point = the bar's low; extendData = {bull}): a small
+// triangle only, so markers never collide; the pattern names show in the legend on hover and in
+// the bar card on click
+const pattern: OverlayTemplate = {
+  name: "d_pat", totalStep: 2, lock: true, needDefaultPointFigure: false,
+  createPointFigures: ({ coordinates, overlay }) => {
+    const e = (overlay.extendData ?? {}) as { bull?: boolean };
+    const { x, y } = coordinates[0];
+    return [{ type: "polygon", ignoreEvent: true, attrs: { coordinates: [{ x, y: y + 5 }, { x: x - 3.5, y: y + 11 }, { x: x + 3.5, y: y + 11 }] },
+      styles: { style: "fill", color: e.bull ? "#12b886" : "#868e96" } }];
+  },
+};
+
+// Drishti pattern marker (server-side, causal; point = the bar's low for bull, high for bear /
+// caution; extendData = {text, kind}). Pattern - not a prediction; 'caution' (a bear pattern in an
+// uptrend) is a faint note only, not a trade marker.
+const signal: OverlayTemplate = {
+  name: "d_signal", totalStep: 2, lock: true, needDefaultPointFigure: false,
+  createPointFigures: ({ coordinates, overlay }) => {
+    const e = (overlay.extendData ?? {}) as { text?: string; kind?: "bull" | "bear" | "caution" };
+    const { x, y } = coordinates[0];
+    if (e.kind === "caution") return [{ type: "text", ignoreEvent: true,
+      attrs: { x, y: y - 6, text: `caution · ${e.text ?? ""}`, align: "center", baseline: "bottom" },
+      styles: { color: "rgba(138,148,166,.75)", backgroundColor: "transparent", size: 9, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } }];
+    const bull = e.kind === "bull";
+    return [{ type: "text", ignoreEvent: true,
+      attrs: { x, y: y + (bull ? 6 : -6), text: `${bull ? "▲" : "▼"} ${e.text ?? ""}`, align: "center", baseline: bull ? "top" : "bottom" },
+      styles: { color: "#ffffff", backgroundColor: bull ? "rgba(16,185,129,.9)" : "rgba(244,63,94,.85)", borderRadius: 3,
+        paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1, size: 9 } }];
+  },
+};
+
+// the stop of a bull pattern marker: a short dashed line at the signal bar's low (extendData = label)
+const stop: OverlayTemplate = {
+  name: "d_stop", totalStep: 3, lock: true, needDefaultPointFigure: false,
+  createPointFigures: ({ coordinates, overlay }) => {
     if (coordinates.length < 2) return [];
-    const y0 = Math.min(coordinates[0].y, coordinates[1].y), y1 = Math.max(coordinates[0].y, coordinates[1].y);
+    const [a, b] = coordinates as Coord[];
     return [
-      { type: "rect", ignoreEvent: true, attrs: { x: 0, y: y0, width: bounding.width, height: Math.max(1, y1 - y0) }, styles: { style: "fill", color: "rgba(120,120,140,.14)" } },
-      { type: "text", ignoreEvent: true, attrs: { x: 4, y: y0, text: String(overlay.extendData ?? ""), align: "left", baseline: "bottom" }, styles: { color: "#667085", backgroundColor: "transparent", size: 11, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 1 } },
+      { type: "line", ignoreEvent: true, attrs: { coordinates: [a, { x: b.x, y: a.y }] }, styles: { style: "dashed", size: 1, color: "#e03131", dashedValue: [4, 3] } },
+      { type: "text", ignoreEvent: true, attrs: { x: b.x + 3, y: a.y, text: String(overlay.extendData ?? "stop"), align: "left", baseline: "middle" },
+        styles: { color: "#e03131", backgroundColor: "transparent", size: 9, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } },
     ];
   },
 };
 
-// Drishti candle-pattern label under a bar (point = the bar's low; extendData = {text, bull})
-const pattern: OverlayTemplate = {
-  name: "d_pat", totalStep: 2, lock: true, needDefaultPointFigure: false,
-  createPointFigures: ({ coordinates, overlay }) => {
-    const e = (overlay.extendData ?? {}) as { text?: string; bull?: boolean };
-    return [{ type: "text", ignoreEvent: true, attrs: { x: coordinates[0].x, y: coordinates[0].y + 6, text: `▲ ${e.text ?? ""}`, align: "center", baseline: "top" },
-      styles: { color: e.bull ? "#12805c" : "#868e96", backgroundColor: "transparent", size: 10, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } }];
+// scanner alert level: a full-width line with its label at the right edge
+// (extendData = {label, color, dashed})
+const level: OverlayTemplate = {
+  name: "d_level", totalStep: 2, lock: true, needDefaultPointFigure: false,
+  createPointFigures: ({ coordinates, bounding, overlay }) => {
+    const e = (overlay.extendData ?? {}) as { label?: string; color?: string; dashed?: boolean };
+    const y = coordinates[0].y, color = e.color ?? "#3a86ff";
+    return [
+      { type: "line", ignoreEvent: true, attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] },
+        styles: { style: e.dashed ? "dashed" : "solid", size: 1.5, color, dashedValue: [6, 4] } },
+      { type: "text", ignoreEvent: true, attrs: { x: bounding.width - 6, y: y - 2, text: e.label ?? "", align: "right", baseline: "bottom" },
+        styles: { color: "#fff", backgroundColor: color, size: 11, paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1, borderRadius: 2 } },
+    ];
   },
 };
 
-// Drishti Buy/Sell Signal label (point = the bar's low for BUY, high for SELL)
-const signal: OverlayTemplate = {
-  name: "d_signal", totalStep: 2, lock: true, needDefaultPointFigure: false,
+// scanner alert bar marker: a ▼ above the bar's high (point = the bar's high)
+const mark: OverlayTemplate = {
+  name: "d_mark", totalStep: 2, lock: true, needDefaultPointFigure: false,
   createPointFigures: ({ coordinates, overlay }) => {
-    const e = (overlay.extendData ?? {}) as { text?: string; side?: "BUY" | "SELL"; isFollow?: boolean };
-    const isBuy = e.side === "BUY";
-    const bg = isBuy
-      ? (e.isFollow ? "rgba(5, 150, 105, 0.95)" : "rgba(16, 185, 129, 0.9)")
-      : (e.isFollow ? "rgba(225, 29, 72, 0.95)" : "rgba(244, 63, 94, 0.9)");
-    const yOffset = isBuy ? 6 : -18;
-    return [{
-      type: "text", ignoreEvent: true,
-      attrs: {
-        x: coordinates[0].x,
-        y: coordinates[0].y + yOffset,
-        text: isBuy ? `▲ ${e.text ?? "BUY"}` : `▼ ${e.text ?? "SELL"}`,
-        align: "center",
-        baseline: isBuy ? "top" : "bottom",
-      },
-      styles: {
-        color: "#ffffff",
-        backgroundColor: bg,
-        borderRadius: 3,
-        paddingLeft: 4,
-        paddingRight: 4,
-        paddingTop: 1,
-        paddingBottom: 1,
-        size: 9,
-      },
-    }];
+    const { x, y } = coordinates[0];
+    return [
+      { type: "polygon", ignoreEvent: true, attrs: { coordinates: [{ x, y: y - 6 }, { x: x - 6, y: y - 16 }, { x: x + 6, y: y - 16 }] }, styles: { style: "fill", color: "#f59f00" } },
+      { type: "text", ignoreEvent: true, attrs: { x, y: y - 18, text: String(overlay.extendData ?? "alert"), align: "center", baseline: "bottom" },
+        styles: { color: "#f59f00", backgroundColor: "transparent", size: 11, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } },
+    ];
   },
 };
 
@@ -120,7 +165,7 @@ let registered = false;
 export function registerOverlays() {
   if (registered) return;
   registered = true;
-  [rect, measure, note, zone, pattern, signal].forEach((o) => registerOverlay(o));
+  [rect, measure, note, zones, pattern, signal, stop, level, mark].forEach((o) => registerOverlay(o));
 }
 
 // --- user drawings: saved per stock and timeframe in this browser (no DB writes) -------------

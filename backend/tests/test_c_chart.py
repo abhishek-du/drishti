@@ -290,3 +290,88 @@ def test_hindsight_confirmation():
 def test_bars_carry_hindsight(client):
     b = client.get("/api/chart2/bars", params={"key": "K", "tf": "5m"}).json()["bars"]
     assert {"dir", "confirm", "follow"} <= b[0].keys() and b[-1]["confirm"] in ("pending", None)
+
+
+def test_trend_detail_matches_levels_trend():
+    """The reasons shown reproduce levels.trend's class (frozen spec rule) and the MA chip uses
+    close vs SMA50 vs SMA200 only."""
+    n = 300
+    up = np.linspace(100, 200, n) + 3 * np.sin(np.arange(n) / 3)
+    df = pd.DataFrame({"open": up, "close": up, "high": up + 1, "low": up - 1, "volume": 1.0})
+    for d in (df, df.iloc[:120].reset_index(drop=True),
+              df[["open", "close", "high", "low"]].mul(-1).add(400).rename(
+                  columns={"high": "low", "low": "high"}).assign(volume=1.0)):
+        ind = indicators.basic(d)
+        t = chart_api.trend_detail(d, ind)
+        assert t["class"] == levels.trend(d, ind)
+        assert t["ma_trend"] in ("UP", "DOWN", "FLAT") and len(t["conditions"]) == 3
+        assert t["text"].startswith(t["class"] + " — ") and "drishti-swing-v1" in t["note"]
+        if t["class"] == "UP":
+            assert all(x["ok"] for x in t["conditions"]) and t["ma_trend"] == "UP"
+    flat = df.copy(); flat.loc[flat.index[-1], "close"] = 0.5          # close below both SMAs
+    ind = indicators.basic(flat)
+    assert chart_api.trend_detail(flat, ind)["ma_trend"] == "FLAT"   # SMA50 > SMA200: not DOWN either
+
+
+def test_bars_carry_trend_detail(client):
+    j = client.get("/api/chart2/bars", params={"key": "K", "tf": "1d"}).json()
+    assert j["trend_detail"]["class"] == j["trend"] and "conditions" in j["trend_detail"]
+
+
+# --- pattern markers (server-side, causal) ------------------------------------------------------
+
+def _markers(df):
+    from drishti.api import chart_markers
+    from drishti.features import candles
+    df = df.reset_index(drop=True)
+    ind = indicators.basic(df)
+    fl = candles.flags(pd.concat([df, ind[["atr"]]], axis=1))
+    return chart_markers.markers(df, ind, fl), ind
+
+
+def test_markers_never_repaint():
+    """A marker on bar j is identical in every prefix that holds bar j (zones known on bar j,
+    not today's), and no prefix has a marker the full series lacks."""
+    total = 0
+    for seed in (2, 13):          # seeds where today's zones would change markers (mutation-checked)
+        df = _bars(320, seed=seed)
+        full, _ = _markers(df)
+        total += len(full)
+        key = lambda ms: {(m["i"], m["kind"], tuple(m["flags"]), m["stop"]) for m in ms}  # noqa: E731
+        for k in range(30, len(df)):
+            pre, _ = _markers(df.iloc[:k + 1])
+            assert key(pre) == {x for x in key(full) if x[0] <= k}, (seed, k)
+    assert total > 0
+
+
+def test_markers_stop_and_caution():
+    from drishti.api.chart_markers import BEARISH
+    from drishti.features import candles
+    seen = set()
+    for seed in range(1, 9):
+        df = _bars(400, seed=seed)
+        ms, ind = _markers(df)
+        c = df.close.to_numpy()
+        for m in ms:
+            j, i = m["i"], m["i"] - 1
+            seen.add(m["kind"])
+            up = c[j] > ind.sma50.iloc[j] > ind.sma200.iloc[j]
+            if m["kind"] == "bull":
+                assert m["stop"] == df.low.iloc[i] and set(m["flags"]) <= set(candles.BULLISH)
+                assert c[j] > df.high.iloc[i]
+            else:
+                assert m["stop"] is None and set(m["flags"]) <= set(BEARISH)
+                assert (m["kind"] == "caution") == bool(up)     # no SELL marker in an uptrend
+    assert "bull" in seen
+
+
+def test_bars_carry_markers(client):
+    j = client.get("/api/chart2/bars", params={"key": "K", "tf": "1d"}).json()
+    mk = j["markers"]
+    assert "not a prediction" in mk["label"] and "drishti-swing-v1" in mk["label"]
+    assert "Scanner" in mk["note"]
+    times = {b["time"] for b in j["bars"]}
+    for m in mk["items"]:
+        assert m["time"] in times and m["kind"] in ("bull", "bear", "caution")
+        assert (m["stop"] is not None) == (m["kind"] == "bull")
+        assert not re.search(r"\b(buy|sell)\b", " ".join(m["flags"]).lower())
