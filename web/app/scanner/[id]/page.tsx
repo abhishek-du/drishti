@@ -8,7 +8,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState } from "react";
 import type { Tf } from "@/components/kchart/KChart";
 import { fmt, get, post, stockHref } from "@/components/api";
-import { AlertResp, DecisionLabel, istTime, OutcomePill, rrClass, StatusPill, tgt } from "@/components/scan";
+import { AlertResp, D5_NOTE, DecisionLabel, istTime, OutcomePill, rrClass, StatusPill, tgt } from "@/components/scan";
 
 const KChart = dynamic(() => import("@/components/kchart/KChart"), { ssr: false, loading: () => <p className="muted">Loading chart…</p> });
 type Status = "watching" | "took" | "skipped";
@@ -56,7 +56,8 @@ export default function AlertPage() {
   if (err) return <p className="muted">{err}</p>;
   if (!r || !tf) return <p className="muted">Loading…</p>;
   const a = r.alert, c = a.context ?? {};
-  const levels = { entry: a.entry_ref, stop: a.stop, r1: a.r1, r2: a.r2, barTime: a.bar_time, tf: a.tf };
+  const saved = Object.entries(c.zones_used ?? {}).map(([name, z]) => ({ name, ...z }));
+  const levels = { entry: a.entry_ref, stop: a.stop, r1: a.r1, r2: a.r2, barTime: a.bar_time, tf: a.tf, zones: saved };
   return (
     <div className="scanpage">
       <DecisionLabel label={r.label} page={`${a.symbol ?? "Alert"} · ${a.detector}`} />
@@ -67,10 +68,11 @@ export default function AlertPage() {
         <span className="muted">bar {istTime(a.bar_time, a.tf)} IST · session {a.session_date}</span>
         <StatusPill status={a.status} /><OutcomePill outcome={a.outcome} r={a.r_net} />
       </div>
+      {a.tf === "15m" && <div className="d5note" role="note">{D5_NOTE}</div>}
       <div className="alertgrid">
         <div style={{ minWidth: 0 }}>
           <KChart instrumentKey={a.instrument_key} tf={tf} setTf={setTf} onData={() => {}} levels={levels} />
-          <p className="muted small">Lines: entry (blue), stop (red), R1 / R2 (green dashed); ▼ marks the alert bar{tf !== a.tf ? ` (shown on the ${a.tf} chart)` : ""}.</p>
+          <p className="muted small">Lines: entry (blue), stop (red), R1 / R2 (green dashed), green bands = the alert&apos;s saved R1 / R2 zones; ▼ marks the alert bar{tf !== a.tf ? ` (shown on the ${a.tf} chart)` : ""}.</p>
         </div>
         <div className="alertside">
           <div className="card">
@@ -87,6 +89,17 @@ export default function AlertPage() {
               <tr><td>ATR</td><td>{fmt(a.atr)}</td></tr>
               <tr><td>Capital · risk</td><td>{fmt(a.capital, 0)} · {fmt(a.risk_pct)}%</td></tr>
             </tbody></table>
+          </div>
+          <div className="card">
+            <b>Saved zones (as the alert saw them)</b>
+            {saved.length === 0 ? <p className="muted small" style={{ margin: "4px 0 0" }}>No saved zones on this alert{a.r1 === null ? " (no resistance above: R1 = entry + 2R)" : ""}. Today&apos;s zones are not used here.</p> : (
+              <table className="kv"><tbody>{saved.map((z) => (
+                <tr key={z.name}><td>{z.name.toUpperCase()} band</td>
+                  <td>{fmt(z.bottom)}–{fmt(z.top)}{z.touches ? ` · ×${z.touches}` : ""}
+                    {z.first && <div className="muted small">pivots {z.first.slice(0, 10)} → {(z.last ?? "").slice(0, 10)}{z.confirmed ? ` · confirmed ${z.confirmed.slice(0, 10)}` : ""}</div>}</td></tr>
+              ))}</tbody></table>
+            )}
+            {c.as_of && <div className="muted small">as of {new Date(c.as_of).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST · last bar {c.last_bar}</div>}
           </div>
           <div className="card">
             <b>Context</b>

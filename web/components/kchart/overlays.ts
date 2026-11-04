@@ -148,6 +148,24 @@ const level: OverlayTemplate = {
   },
 };
 
+// scanner alert's saved R1 / R2 zone band (context.zones_used): full width, green, label in the
+// middle (clear of the legend at the left and the level tags at the right) (extendData = {top, bottom, label})
+const band: OverlayTemplate = {
+  name: "d_band", totalStep: 2, lock: true, needDefaultPointFigure: false,
+  createPointFigures: ({ bounding, overlay, yAxis }) => {
+    if (!yAxis) return [];
+    const e = (overlay.extendData ?? {}) as { top: number; bottom: number; label: string };
+    const a = yAxis.convertToPixel(e.top), b = yAxis.convertToPixel(e.bottom);
+    const y0 = Math.min(a, b), y1 = Math.max(a, b);
+    return [
+      { type: "rect", ignoreEvent: true, attrs: { x: 0, y: y0, width: bounding.width, height: Math.max(1, y1 - y0) },
+        styles: { style: "stroke_fill", color: "rgba(47,158,68,.16)", borderColor: "rgba(47,158,68,.55)", borderSize: 1, borderStyle: "dashed" } },
+      { type: "text", ignoreEvent: true, attrs: { x: bounding.width * 0.45, y: y0 - 1, text: e.label, align: "center", baseline: "bottom" },
+        styles: { color: "#fff", backgroundColor: "rgba(47,158,68,.85)", size: 10, paddingLeft: 3, paddingRight: 3, paddingTop: 1, paddingBottom: 1, borderRadius: 2 } },
+    ];
+  },
+};
+
 // scanner alert bar marker: a ▼ above the bar's high (point = the bar's high)
 const mark: OverlayTemplate = {
   name: "d_mark", totalStep: 2, lock: true, needDefaultPointFigure: false,
@@ -165,7 +183,7 @@ let registered = false;
 export function registerOverlays() {
   if (registered) return;
   registered = true;
-  [rect, measure, note, zones, pattern, signal, stop, level, mark].forEach((o) => registerOverlay(o));
+  [rect, measure, note, zones, pattern, signal, stop, level, band, mark].forEach((o) => registerOverlay(o));
 }
 
 // --- user drawings: saved per stock and timeframe in this browser (no DB writes) -------------

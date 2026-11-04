@@ -45,7 +45,10 @@ function lsSet(k: string, v: unknown) { try { localStorage.setItem(k, JSON.strin
 const qs = (o: Record<string, string | number | boolean>) => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&");
 
 /** Scanner alert levels drawn on the chart (entry blue, stop red, R1/R2 green dashed, marker on bar_time). */
-export type AlertLevels = { entry: number; stop: number; r1: number | null; r2: number | null; barTime: string; tf: "1d" | "15m" };
+/** A zone as the alert saw it (scan_alert.context.zones_used): pivot dates first / last, and the
+ * date the last pivot was confirmed (5 bars later). */
+export type SavedZone = { name: string; bottom: number; top: number; touches?: number; first?: string; last?: string; confirmed?: string };
+export type AlertLevels = { entry: number; stop: number; r1: number | null; r2: number | null; barTime: string; tf: "1d" | "15m"; zones: SavedZone[] };
 
 export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
   instrumentKey: string; tf: Tf; setTf: (t: Tf) => void; onData: (d: BarsData | null) => void; levels?: AlertLevels;
@@ -62,6 +65,10 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
   const [ctype, setCtype] = useState<CType>("candle_solid");
   const [scale, setScale] = useState<Scale>("normal");
   const [layers, setLayers] = useState<Layers>({ zones: true, patterns: "bullish", trend: true, signals: true });
+  // alert panel (point in time): today's zones are off by default and never share the stock page's setting
+  const [todayZ, setTodayZ] = useState(false);
+  const showZones = levels ? todayZ : layers.zones;
+  const levelsKey = JSON.stringify(levels ?? null);   // pages build `levels` inline: redraw only on a real change
   const [inds, setInds] = useState<Instance[]>(DEFAULT_SET);
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [magnet, setMagnet] = useState<Magnet>("weak_magnet");
@@ -189,12 +196,16 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
     const ov: OverlayCreate[] = [line(levels.entry, "Entry", "#3a86ff", false), line(levels.stop, "Stop", "#e03131", false)];
     if (levels.r1 !== null) ov.push(line(levels.r1, "R1", "#2f9e44", true));
     if (levels.r2 !== null) ov.push(line(levels.r2, "R2", "#2f9e44", true));
+    // the alert's own R1 / R2 bands, as saved with the alert (not today's zones)
+    levels.zones.forEach((z) => ov.push({ name: "d_band", groupId: "alert", lock: true,
+      extendData: { top: z.top, bottom: z.bottom, label: `${z.name.toUpperCase()} zone (alert's) ${z.bottom.toFixed(2)}–${z.top.toFixed(2)}${z.first ? ` · pivots ${z.first.slice(0, 10)} → ${(z.last ?? "").slice(0, 10)}` : ""}${z.confirmed ? ` · confirmed ${z.confirmed.slice(0, 10)}` : ""}` },
+      points: [{ timestamp: t1, value: z.top }] } as OverlayCreate));
     // the alert bar: 1d bars are keyed by the IST date, intraday bars by their start time
     const at = levels.tf === "1d" ? ts(new Date(levels.barTime).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })) : Date.parse(levels.barTime);
     const bar = bars.current.find((k) => k.timestamp === at);
     if (bar && (levels.tf === d.tf)) ov.push({ name: "d_mark", groupId: "alert", lock: true, extendData: "alert", points: [{ timestamp: at, value: bar.high }] } as OverlayCreate);
     c.createOverlay(ov);
-  }, [d, levels]);
+  }, [d, levelsKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Drishti layers
   useEffect(() => {
@@ -203,8 +214,8 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
     c.removeOverlay({ groupId: "drishti" });
     const t0 = bars.current[0].timestamp, t1 = bars.current[bars.current.length - 1].timestamp;
     const ov: OverlayCreate[] = [];
-    if (layers.zones && d.zones.length) ov.push({ name: "d_zones", groupId: "drishti", lock: true,
-      extendData: d.zones.map((z) => ({ top: z.top, bottom: z.bottom, label: `S/R ×${z.touches} · ${z.price.toFixed(2)}` })),
+    if (showZones && d.zones.length) ov.push({ name: "d_zones", groupId: "drishti", lock: true,
+      extendData: d.zones.map((z) => ({ top: z.top, bottom: z.bottom, label: `${levels ? "Today's zone (not the alert's) · " : ""}S/R ×${z.touches} · ${z.price.toFixed(2)}` })),
       points: [{ timestamp: t0, value: d.zones[0].price }] });
     if (layers.patterns !== "off") {
       const bull = new Set(d.bullish_flags);
@@ -233,7 +244,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
       });
     }
     if (ov.length) c.createOverlay(ov);
-  }, [d, layers]);
+  }, [d, layers, showZones, levelsKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // indicators: values fetched per instance from the API, drawn by the catalog templates
   const indKey = JSON.stringify(inds);
@@ -483,7 +494,9 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
           <label className="tog">Price scale <select value={scale} onChange={(e) => setScaleP(e.target.value as Scale)}><option value="normal">Regular</option><option value="logarithm">Log</option><option value="percentage">Percent</option></select></label>
           <label className="tog">Theme <select value={theme} onChange={(e) => setThemeP(e.target.value as "light" | "dark")}><option value="light">Light</option><option value="dark">Dark</option></select></label>
           <b>Drishti layers</b>
-          <label className="tog"><input type="checkbox" checked={layers.zones} onChange={(e) => setLayersP({ ...layers, zones: e.target.checked })} />S/R zones</label>
+          {levels
+            ? <label className="tog"><input type="checkbox" checked={todayZ} onChange={(e) => setTodayZ(e.target.checked)} />Today&apos;s zones (not the alert&apos;s)</label>
+            : <label className="tog"><input type="checkbox" checked={layers.zones} onChange={(e) => setLayersP({ ...layers, zones: e.target.checked })} />S/R zones</label>}
           <label className="tog">Candle patterns <select value={layers.patterns} onChange={(e) => setLayersP({ ...layers, patterns: e.target.value as Layers["patterns"] })}><option value="bullish">trigger flags</option><option value="all">all 26</option><option value="off">off</option></select></label>
           <label className="tog"><input type="checkbox" checked={layers.trend} onChange={(e) => setLayersP({ ...layers, trend: e.target.checked })} />Trend badges</label>
           <label className="tog"><input type="checkbox" checked={layers.signals} onChange={(e) => setLayersP({ ...layers, signals: e.target.checked })} />Pattern markers (▲ bull + stop · ▼ bear · faint caution)</label>
@@ -492,6 +505,12 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
         </div>
       )}
       {layers.trend && d && <TrendStrip d={d} live={live} />}
+      {levels && (
+        <div className="kc-mknote kc-pit" role="note">
+          <span>Point in time: lines and green bands are the alert&apos;s saved levels{levels.zones.length ? "" : " (this alert has no saved zones: R1 / R2 lines only)"}.</span>
+          <label className="tog"><input type="checkbox" checked={todayZ} onChange={(e) => setTodayZ(e.target.checked)} />Today&apos;s zones (not the alert&apos;s)</label>
+        </div>
+      )}
       {layers.signals && d?.markers && d.markers.items.length > 0 && (
         <div className="kc-mknote" role="note">▲▼ {d.markers.label}. Actionable: <a href="/scanner">Scanner alerts</a> (entry / stop / R1 / R2), not these markers.</div>
       )}

@@ -3,7 +3,7 @@
 // PAPER ONLY, no order button). Read only: the journal is edited on the alert page.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fmt, get, stockHref } from "@/components/api";
-import { AlertsResp, DecisionLabel, istTime, OutcomePill, rrClass, StatusPill } from "@/components/scan";
+import { AlertsResp, D5_NOTE, DecisionLabel, istTime, OutcomePill, rrClass, StatusPill } from "@/components/scan";
 
 type Sort = { key: "rr" | "detector" | "symbol"; dir: 1 | -1 };
 const NEW_MIN = 15;
@@ -24,9 +24,19 @@ export default function Scanner() {
   const [d, setD] = useState<AlertsResp | null>(null);
   const [err, setErr] = useState("");
 
-  const load = useCallback(() => {
-    const q = new URLSearchParams({ tf, ...(date ? { date } : {}), ...(det ? { detector: det } : {}) });
-    get<AlertsResp>(`/api/scan/alerts?${q}`).then((x) => { setD(x); setErr(""); }).catch((e) => setErr(String(e)));
+  const load = useCallback(async () => {
+    const q = (day?: string) => `/api/scan/alerts?${new URLSearchParams({ tf, ...(day ? { date: day } : {}), ...(det ? { detector: det } : {}) })}`;
+    try {
+      let x = await get<AlertsResp>(q(date || undefined));
+      // no session picked: the API's default is the latest session of any timeframe (the EOD 1d
+      // scan of today runs at 19:45), so fall back to the latest session with alerts on this tab
+      if (!date && !det && x.alerts.length === 0)
+        for (const day of x.dates.filter((y) => y !== x.session)) {
+          const y = await get<AlertsResp>(q(day));
+          if (y.alerts.length) { x = y; break; }
+        }
+      setD(x); setErr("");
+    } catch (e) { setErr(String(e)); }
   }, [tf, date, det]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -69,6 +79,7 @@ export default function Scanner() {
         {(d?.detectors ?? []).map((x) => <button key={x} className={`chip ${det === x ? "sel" : ""}`} onClick={() => setDet(det === x ? null : x)}>{x}</button>)}
       </div>
       {err && <p className="muted">{err}</p>}
+      {tf === "15m" && <div className="d5note" role="note">{D5_NOTE}</div>}
       <div className="card scanbox">
         {d && rows.length === 0 ? <p className="muted" style={{ margin: 12 }}>No alerts for this session</p> : (
           <div className="scroll">

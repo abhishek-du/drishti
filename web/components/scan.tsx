@@ -5,7 +5,11 @@
 import { useEffect } from "react";
 import { fmt } from "./api";
 
-export type Ctx = { regime?: string; spec_gate?: string; close?: number; rsi?: number; volr20?: number; trend?: string; flags?: string[]; bar_source?: string };
+export type Ctx = { regime?: string; spec_gate?: string; close?: number; rsi?: number; volr20?: number; trend?: string; flags?: string[]; bar_source?: string;
+  as_of?: string; last_bar?: string;
+  zones_used?: Record<string, { bottom: number; top: number; touches?: number; first?: string; last?: string; confirmed?: string }> };
+/** DEVIATIONS D5: the caveat shown on every 15m alert. */
+export const D5_NOTE = "Intraday levels use unadjusted 15m bars: unreliable for stocks with a split or bonus in the last ~25 days.";
 export type Alert = {
   id: number; session_date: string; tf: "1d" | "15m"; bar_time: string; instrument_key: string; symbol: string | null;
   detector: string; entry_ref: number; stop: number; r1: number | null; r2: number | null; rr_r1: number | null;
