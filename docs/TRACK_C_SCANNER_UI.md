@@ -59,3 +59,13 @@ Next.js calls the API through the existing proxy/fetch helper used by the chart 
 - A POST from the form updates the row (status pill) after refetch; a Took without entry shows the 400 message.
 - Works at 390 px width (table scrolls inside its card, not the page).
 - Report: commit hash on `track-c`, screenshots, any API gaps found.
+
+## Follow-up after the merge of c17ad9d (Track A review, 2026-11-04)
+
+**Must fix: point in time on the alert panel.** `scanner/[id]` renders `KChart` with its default layers, so **today's S/R zones** (`layers.zones: true`, from the chart API) are drawn next to the alert's levels, unlabelled. That breaks the rule in "Alert panel" above.
+- On the alert panel, turn the chart API's zones off by default: a `defaultLayers` / `hideZones` prop, without changing the stock page.
+- Draw the alert's own R1/R2 bands from `context.zones_used` (`bottom`/`top`, with first/last/confirmed dates in the tooltip).
+- If the user turns today's zones on, label them "Today's zones (not the alert's)".
+- Accept: on `/scanner/21` (LALPATHLAB) the only bands shown by default are 1960.49–1991.41 (R1) and 2017.64–2048.56 (R2).
+
+**Show the caveat (DEVIATIONS D5):** on 15m alerts, a small note: "Intraday levels use unadjusted 15m bars: unreliable for stocks with a split or bonus in the last ~25 days."
