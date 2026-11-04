@@ -134,7 +134,14 @@ async def bars15(ps, keys: list[str], since: _dt.date) -> pd.DataFrame:
             own = own[[(k, d) not in pj_days for k, d in
                        zip(own.instrument_key, own.t.dt.tz_convert(IST).dt.date)]]
     out = pd.concat([pj, own]) if not own.empty else pj
-    return out.sort_values(["instrument_key", "t"]).reset_index(drop=True)
+    return utc_t(out).sort_values(["instrument_key", "t"]).reset_index(drop=True)
+
+
+def utc_t(df: pd.DataFrame) -> pd.DataFrame:
+    """One datetime64[UTC] `t` column: Prajna's rows come as python datetimes, the recorder's
+    as pandas timestamps, and their concat is an object column (scan_grade 2026-11-04 failed on
+    `.dt`)."""
+    return df.assign(t=pd.to_datetime(df.t, utc=True)) if len(df) else df
 
 
 # ---- scans ------------------------------------------------------------------------------

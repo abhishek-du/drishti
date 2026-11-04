@@ -191,3 +191,15 @@ def test_journal_api_and_stats_on_test_db():
             db.engine.cache_clear()
 
     asyncio.run(go())
+
+
+def test_mixed_15m_sources_give_a_datetime_column():
+    import datetime as dt
+    from drishti.scanner.run import utc_t
+    pj = pd.DataFrame({"instrument_key": ["K"], "t": [dt.datetime(2026, 11, 2, 3, 45,
+                                                                  tzinfo=dt.timezone.utc)]})
+    own = pd.DataFrame({"instrument_key": ["K"], "t": [pd.Timestamp("2026-11-03 03:45",
+                                                                    tz="UTC")]})
+    out = utc_t(pd.concat([pj, own]))
+    assert str(out.t.dtype) == "datetime64[ns, UTC]" or str(out.t.dtype).startswith("datetime64")
+    assert out.t.dt.tz_convert("Asia/Kolkata").dt.hour.tolist() == [9, 9]
