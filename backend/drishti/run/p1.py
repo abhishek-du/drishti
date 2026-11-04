@@ -10,7 +10,7 @@
     .venv/bin/python -m drishti.run.p1 compare1d [--date D]           # vs Prajna (shadow)
     .venv/bin/python -m drishti.run.p1 ca [--limit N] [--isins A,B]   # corporate actions (P1c)
     .venv/bin/python -m drishti.run.p1 news [--limit N]               # Upstox /v2/news (P1c, D2)
-    .venv/bin/python -m drishti.run.p1 intraday [--date D] [--limit N] [--tf 1m,15m,1h]  # D3
+    .venv/bin/python -m drishti.run.p1 intraday [--date D] [--limit N] [--tf 1m,15m,1h] [--missing]  # D3
 """
 
 from __future__ import annotations
@@ -189,13 +189,17 @@ async def main(cmd: str, args: list[str]) -> dict:
                     day = t.date()
                 else:
                     day = await previous_session(s, t.date())
-                keys = await intraday.top_keys(s, await previous_session(s, day))
-                if "--limit" in args:
-                    keys = keys[:int(args[args.index("--limit") + 1])]
                 tfs = args[args.index("--tf") + 1].split(",") if "--tf" in args \
                     else list(intraday.TFS)
+                if "--missing" in args:          # the later pass: only keys still empty
+                    keys = intraday.missing(day, tfs)
+                else:
+                    keys = await intraday.top_keys(s, await previous_session(s, day))
+                    if "--limit" in args:
+                        keys = keys[:int(args[args.index("--limit") + 1])]
                 out = intraday.fetch(Upstox(fraction=min(
-                    0.5, get_settings().DRISHTI_UPSTOX_RATE_FRACTION)), keys, day, tfs)
+                    0.5, get_settings().DRISHTI_UPSTOX_RATE_FRACTION)), keys, day, tfs,
+                    allowed=lambda: daily1d.a_rule_ok(now()))
                 async with prajna_sessionmaker()() as ps:
                     out["vs_prajna"] = await intraday.compare_with_prajna(ps, day, tfs)
             elif cmd == "compare1d":

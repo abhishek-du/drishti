@@ -79,12 +79,34 @@ def read(tf: str, day: _dt.date) -> pd.DataFrame:
                                                          keep="last")
 
 
-def fetch(api, keys: list[str], day: _dt.date, tfs=tuple(TFS)) -> dict:
+def missing(day: _dt.date, tfs=tuple(TFS)) -> dict[str, list[str]]:
+    """Per tf, the keys of `day` that no manifest has candles for yet. Upstox fills the previous
+    session's intraday history over the night (2026-11-04 01:00: 1m only 18 of 524 keys), so a
+    later pass fetches only these."""
+    have: dict[str, set[str]] = {tf: set() for tf in tfs}
+    asked: dict[str, set[str]] = {tf: set() for tf in tfs}
+    for f in sorted((root() / "manifest").glob(f"{day}_*.json")):
+        for x in json.loads(f.read_text()):
+            if x["tf"] in have:
+                asked[x["tf"]].add(x["key"])
+                if x["candles"] > 0:
+                    have[x["tf"]].add(x["key"])
+    return {tf: sorted(asked[tf] - have[tf]) for tf in tfs}
+
+
+def fetch(api, keys: list[str] | dict[str, list[str]], day: _dt.date, tfs=tuple(TFS),
+          allowed=lambda: True) -> dict:
+    """keys: one list for every tf, or {tf: keys}. `allowed()` is checked before every request
+    (decision A's window): the run stops cleanly when it turns false."""
     stamp = now().strftime("%Y%m%dT%H%M%S")
-    man, out = [], {"session": str(day), "keys": len(keys)}
+    per_tf = keys if isinstance(keys, dict) else {tf: keys for tf in tfs}
+    man, out = [], {"session": str(day), "keys": {tf: len(per_tf.get(tf, [])) for tf in tfs}}
     for tf in tfs:
         rows, c = [], {"ok": 0, "empty": 0, "errors": 0, "candles": 0}
-        for k in keys:
+        for k in per_tf.get(tf, []):
+            if not allowed():
+                out["stopped"] = f"window closed at {now():%H:%M} during {tf}"
+                break
             r = api.get_response(f"/v3/historical-candle/{quote(k, safe='')}/{TFS[tf]}/{day}/{day}")
             sha = hashlib.sha256(r.content).hexdigest()
             cs = (r.json().get("data") or {}).get("candles") or [] if r.status_code == 200 else []
@@ -100,6 +122,8 @@ def fetch(api, keys: list[str], day: _dt.date, tfs=tuple(TFS)) -> dict:
         p = write(tf, day, rows, stamp)
         c["bytes"] = p.stat().st_size if p else 0
         out[tf] = c
+        if "stopped" in out:
+            break
     m = root() / "manifest" / f"{day}_{stamp}.json"
     m.parent.mkdir(parents=True, exist_ok=True)
     m.write_text(json.dumps(man))

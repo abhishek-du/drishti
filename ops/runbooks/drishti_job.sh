@@ -7,6 +7,7 @@
 # PAPER ONLY. Read-only market data. Drishti never logs in to Upstox (decision A).
 set -uo pipefail
 JOB="${1:?job}"
+shift; ARGS=("$@")                        # extra args go to the job (e.g. intraday --missing)
 cd "$(dirname "$0")/../../backend"
 mkdir -p var/logs var/run
 LOG=var/logs/cron.log
@@ -32,7 +33,7 @@ if [ "$JOB" = scan_intraday ]; then          # every 15 min: log only real runs
   exit $rc
 fi
 say "DRISHTI_${JOB^^}_START"
-if .venv/bin/python -m "$MOD" "$JOB" > "$OUT" 2>&1; then
+if .venv/bin/python -m "$MOD" "$JOB" "${ARGS[@]}" > "$OUT" 2>&1; then
   say "DRISHTI_${JOB^^}_OK $(tr -d '\n ' < "$OUT" | cut -c1-200)"
 else
   rc=$?; say "DRISHTI_${JOB^^}_FAIL rc=$rc $(tail -1 "$OUT" | cut -c1-200)"; exit $rc

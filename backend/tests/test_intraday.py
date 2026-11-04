@@ -56,3 +56,13 @@ def test_fetch_writes_one_session_and_rerun_keeps_latest(data_dir):
     df = intraday.read("1m", day)
     assert len(df) == 2 and set(df.open) == {200.0}
     assert len(list((data_dir / "intraday" / "manifest").glob("*.json"))) == 2
+
+
+def test_missing_pass_and_window_stop(data_dir):
+    day = _dt.date(2026, 11, 3)
+    intraday.fetch(FakeApi(), ["NSE_EQ|A", "NSE_EQ|BAD"], day, ("1m",))
+    assert intraday.missing(day, ("1m",)) == {"1m": ["NSE_EQ|BAD"]}
+    api = FakeApi()
+    out = intraday.fetch(api, {"1m": ["NSE_EQ|X", "NSE_EQ|Y"]}, day, ("1m",),
+                         allowed=lambda: len(api.paths) < 1)
+    assert len(api.paths) == 1 and "stopped" in out

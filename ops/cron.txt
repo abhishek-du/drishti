@@ -35,3 +35,6 @@
 # Nightly intraday (P1c, D3): 1m/15m/1h of the previous session for the top 500 + 21 indices
 # (~1,570 historical requests at fraction 0.5, after daily1d; files only, ~2 MB/night) + overlap check vs Prajna
 0 1 * * 2-6    /home/cis/windows/drishti/ops/runbooks/drishti_job.sh intraday
+# second pass: Upstox fills the previous session's intraday history over the night (11-04 01:00:
+# 1m for only 18 of 524 keys), so 04:30 re-fetches only the keys still empty; stops at 05:30 (decision A)
+30 4 * * 2-6   /home/cis/windows/drishti/ops/runbooks/drishti_job.sh intraday --missing
