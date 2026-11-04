@@ -166,7 +166,9 @@ async def store_hits(s, rid, day, tf: str, bar_time, key: str, sym, hs: list[dic
                   "confirmed": stamps[min(v["last"] + 5, len(stamps) - 1)]}
               for n, v in h.get("zones_used", {}).items()
               if v.get("first") is not None} if stamps is not None else {}
-        hctx = {**ctx, "zones_used": zu}
+        hctx = {**ctx, "zones_used": zu, "target": z["target"], "target_basis": z["target_basis"],
+                "net_rr_r1": z["net_rr_r1"], "net_rr_target": z["net_rr_target"],
+                "low_rr": z["low_rr"], "tags": ["low R:R"] if z["low_rr"] else []}
         i = (await s.execute(text("""insert into scan_alert(run_id, session_date, tf, bar_time,
             instrument_key, symbol, detector, version, entry_ref, stop, r1, r2, rr_r1, qty,
             capital, risk_pct, cost_r, atr, context) values (:r, :d, :tf, :bt, :k, :sym, :det,
@@ -277,17 +279,20 @@ async def scan_intraday(s, ps, rid, t: _dt.datetime) -> dict:
 
 # ---- grading ----------------------------------------------------------------------------
 
-async def scan_grade(s, ps, rid) -> dict:
+async def scan_grade(s, ps, rid, regrade_all: bool = False) -> dict:
+    """regrade_all: every alert again (append-only: the newest grade wins), e.g. after the
+    target rule changed (2026-11-04: R2 / 2R when R1's net R:R < 1)."""
     alerts = [dict(r) for r in (await s.execute(text("""
         select a.*, j.status, j.actual_entry, j.actual_qty from scan_alert a
         left join journal_entry j on j.alert_id = a.id
-        where not exists (select 1 from journal_outcome o where o.alert_id = a.id)
+        where cast(:all as boolean) or not exists (select 1 from journal_outcome o where o.alert_id = a.id)
            or exists (select 1 from (select distinct on (basis) outcome from journal_outcome o
                       where o.alert_id = a.id order by basis, graded_at desc, id desc) l
                       where l.outcome = 'OPEN')
            or (j.status = 'took' and j.actual_entry is not null and not exists (
                select 1 from journal_outcome o where o.alert_id = a.id and o.basis = 'took'
-                 and o.outcome <> 'OPEN' and o.entry_used = j.actual_entry))"""))).mappings()]
+                 and o.outcome <> 'OPEN' and o.entry_used = j.actual_entry))"""),
+        {"all": regrade_all})).mappings()]
     if not alerts:
         return {"graded": 0}
     cfg = get_settings()
@@ -354,7 +359,7 @@ async def main(cmd: str, args: list[str]) -> dict:
                 out["telegram"] = await notify.alerts(s, out.pop("alert_ids", []), "Intraday 15m")
                 out["telegram_radar"] = notify.radar(out.get("radar_new", []), out.get("bar", ""))
             elif cmd == "scan_grade":
-                out = await scan_grade(s, ps, rid)
+                out = await scan_grade(s, ps, rid, "--all" in args)
             else:
                 raise SystemExit(__doc__)
         except BaseException as e:

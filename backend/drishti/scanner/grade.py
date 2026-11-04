@@ -2,7 +2,8 @@
 
 Barriers (the frozen exit rules of drishti.strategies.orders.exit_path: stop first on a bar that
 touches both, gap-through at the open):
-  target = R1 (or entry + 2R when no resistance was above), stop = the alert's stop,
+  target = detect.choose_target: R1 if its net R:R >= 1, else R2, else entry + 2R (user
+  2026-11-04: an R1 just above the entry loses money even when hit), stop = the alert's stop,
   time-out = HOLD bars (1d: 5 sessions; 15m: 25 bars, about one session).
 Bases:
   alert    fill only if the next bar trades through entry_ref (at the open on a gap above it)
@@ -51,7 +52,12 @@ def grade(a: dict, o, h, lo, c, basis: str, actual_entry: float | None = None,
     risk = entry - stop
     if risk <= 0:
         return {"outcome": "NO_FILL", "bars_used": 1, "entry_used": entry, "seed": seed}
-    target = float(a["r1"]) if a.get("r1") and float(a["r1"]) > entry else entry + 2 * risk
+    from drishti.scanner.detect import choose_target
+    t = choose_target(ref, stop, a.get("r1"), a.get("r2"), int(a.get("qty") or 0) or
+                      _qty(ref, stop, None, capital, risk_pct))["target"]
+    # the alert's target (R1, or R2 / 2R when R1's net R:R < 1); entry + 2R if the fill is
+    # already above it
+    target = t if t > entry else entry + 2 * risk
     res = exit_path(o, h, lo, c, 0, stop, target, HOLD[a["tf"]])
     if res is None:
         return {"outcome": "OPEN", "bars_used": len(c), "entry_used": entry,

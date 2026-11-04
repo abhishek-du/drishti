@@ -86,12 +86,45 @@ def levels_for(detector: str, high_t: float, low_ref: float, atr: float, zs: lis
                            for n, z in (("r1", z1), ("r2", z2)) if z}}
 
 
+MIN_NET_RR = 1.0
+
+
+def net_rr(entry: float, stop: float, target: float, qty: int) -> float | None:
+    """Net reward:risk under the backtester's cost model (drishti.core.costs.round_trip at the
+    base slippage; the stop at -1 R): (R at target - costs) / (1 R + costs at the stop)."""
+    risk = entry - stop
+    if not (risk > 0 and qty and target > entry):
+        return None
+    win = (target - entry) / risk - costs.round_trip(entry, target, qty) / qty / risk
+    loss = 1 + costs.round_trip(entry, stop, qty) / qty / risk
+    return win / loss
+
+
+def choose_target(entry: float, stop: float, r1, r2, qty: int) -> dict:
+    """The target the grader and the odds use (user 2026-11-04): R1 when its net R:R >= 1, else
+    R2 when that is >= 1, else entry + 2R. An alert whose R1 fails is tagged low_rr (R1 and R2
+    stay as levels). Works on any stored alert (old rows included): only stored fields."""
+    risk = entry - stop
+    r1 = float(r1) if r1 is not None else None
+    r2 = float(r2) if r2 is not None else None
+    n1 = net_rr(entry, stop, r1, qty) if r1 is not None else None
+    for basis, t in (("R1", r1), ("R2", r2)):
+        if t is not None and t > entry and (net_rr(entry, stop, t, qty) or 0) >= MIN_NET_RR:
+            break
+    else:
+        basis, t = "2R", entry + 2 * risk
+    return {"target": t, "target_basis": basis, "net_rr_r1": n1,
+            "net_rr_target": net_rr(entry, stop, t, qty),
+            "low_rr": n1 is not None and n1 < MIN_NET_RR}
+
+
 def size(h: dict, capital: float, risk_pct: float) -> dict:
-    """Qty at risk_pct of capital, and the round-trip cost (base slippage) in R to R1 (or 2R
-    when there is no resistance above)."""
+    """Qty at risk_pct of capital, the target (choose_target), and the round-trip cost (base
+    slippage) in R to that target."""
     risk = h["entry_ref"] - h["stop"]
     qty = max(1, math.floor(capital * risk_pct / 100 / risk)) if risk > 0 else 0
-    target = h["r1"] if h["r1"] else h["entry_ref"] + 2 * risk
+    ct = choose_target(h["entry_ref"], h["stop"], h["r1"], h["r2"], qty)
+    target = ct["target"]
     cost_r = costs.round_trip(h["entry_ref"], target, qty) / qty / risk if qty and risk > 0 \
         else None
-    return {**h, "qty": qty, "cost_r": cost_r, "target_ref": target}
+    return {**h, **ct, "qty": qty, "cost_r": cost_r, "target_ref": target}

@@ -306,6 +306,17 @@ A tool for the user's own discretionary paper trading. It is **not** a strategy,
 - **Levels:** entry = buy-stop 0.05 % above bar t's high; stop = the wider of (structure low - 0.1 ATR) and (entry - 1 ATR); R1/R2 = the bottoms of the next two resistance zones above the entry; RR to R1; qty at `DRISHTI_SCAN_RISK_PCT` (1 %) of `DRISHTI_SCAN_CAPITAL` (10 lakh); round-trip cost in R. RR is shown, never filtered: a small RR is information for the user.
 - **Jobs (`drishti/scanner/run.py`):** `scan_eod` 19:45 on the eligible top 500 (Scout's bars, provisional T); `scan_intraday` every 15 min on the watchlist, last closed 15m bar (Prajna's 15m history until the switch + the recorder's 1m); `scan_grade` 09:45 (after Prajna's official 1d of T-1; moves after `daily1d` at the switch).
 - **Grading (`drishti/scanner/grade.py`):** triple barrier with the frozen `exit_path` (stop first, gap rules): R1 (or entry + 2R when no resistance) / stop / time-out (1d: 5 sessions; 15m: 25 bars). Three bases for every alert: `alert` (fills only if the next bar trades through the entry), `took` (the user's actual entry) and `placebo` (seeded random entry in the next bar's range, same stop/target/time-out). Net of costs, in R.
+- **Target rule (user 2026-11-04, `detect.choose_target`):**
+  - The net reward:risk to R1 is computed under the backtester's cost model: `costs.round_trip` at the base slippage, with the stop at −1 R.
+  - When it is below 1, the alert is tagged **"low R:R"** and its target becomes R2 if R2's net R:R ≥ 1, else entry + 2R. R1 and R2 stay as levels.
+  - The grader, the odds job and the API all use this target. It is computed from stored fields, so old alerts get it too.
+  - On 11-04 every alert was regraded once (`scan_grade --all`; append-only, the newest grade wins). An outcome of `R1` now means "target hit"; `target_used` records which level.
+  - 8 of the 24 EOD alerts of 11-02/11-03 were low R:R (e.g. JINDALPOLY: entry 690.55, R1 690.75, net R:R −0.07, target now R2 748.57).
+- **Odds (Track B engine `judge/odds.py`, `odds-1d-v1`; RESEARCH / SIMULATION, NOT a signal):**
+  - The nightly `odds` job (`drishti/scanner/odds_job.py`, 20:15) stores one row per 1d alert, plus the user's `took` entry, in `odds_result` (migration 0010, Track B's PROPOSED_DDL + label, caveat, data_as_of).
+  - **Point in time:** the bars and CA factors are those knowable at the alert's own 19:45 scan (`context.as_of`), so a re-run gives the same result.
+  - This wraps the engine instead of `python -m drishti.judge.odds --alerts --store`, which writes JSONL only and cuts at the next morning's 09:00 (not reproducible when run the same night).
+  - `GET /api/scan/alert/{id}` returns `odds` (the latest per basis) for Track C's odds panel.
 - **Tables (migration 0008):** `scan_alert`, `journal_event`, `journal_outcome` append-only; `journal_entry` editable by the user through the API (DEVIATIONS D4).
 - **API (`drishti/api/scan_api.py`):** `GET /api/scan/alerts`, `GET /api/scan/alert/{id}`, `POST /api/journal/{alert_id}` (the only write endpoint), `GET /api/journal/stats` (took vs took_base vs all alerts vs placebo, by detector). The blind rule covers v1 and the forward tests, not this journal: the user asked to see their own results.
 - **Telegram:** the day's EOD list and each new intraday alert, when `DRISHTI_TELEGRAM_BOT_TOKEN` and `DRISHTI_TELEGRAM_CHAT_ID` are set in `.env`; otherwise the message is logged.

@@ -87,3 +87,16 @@ Next.js calls the API through the existing proxy/fetch helper used by the chart 
 - Empty state: "No stock newly met the criteria today".
 
 **Accept:** build passes; label + caveat visible (light + dark); 390 px width OK.
+
+
+## Next task: target / low R:R and the odds panel (2026-11-04)
+
+- **Alert rows** (`/api/scan/alerts`, `/api/scan/alert/{id}`) now carry `target`, `target_basis` (`R1` | `R2` | `2R`), `net_rr_r1`, `net_rr_target`, `low_rr` and `tags` (`["low R:R"]`).
+  - Show a "low R:R" chip.
+  - Show the RR column as the net R:R to the chosen target, with R1's net R:R in the tooltip.
+  - Draw the target line, and keep R1/R2 as levels.
+  - An outcome `R1` means "target hit"; label it "Target".
+- **Odds panel** on `/scanner/[id]`, from `odds.alert` (and `odds.took` when present):
+  - Show `label` and `caveat` verbatim, "Research / simulation — not a signal".
+  - Show `verdict`, then the net break-even (`breakeven`) vs the Monte Carlo target-first share (`p_target_mc`).
+  - Show a table of `mc` and `replay` (target / stop / neither / green %, average, median and 5–95 % net R), the pool dates (`pool.first` … `pool.last`) and `data_as_of`.

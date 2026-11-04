@@ -91,6 +91,8 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - The 11-20 switch alone does not fix it: the fix is part of the re-point (P1c item 4).
 - EOD alerts are fine (adjusted 1d).
 
+**Cron line to install (2026-11-04):** `15 20 * * 1-5 … drishti_job.sh odds`, the nightly Time Machine odds for the day's 1d alerts. Also still pending: `30 4 * * 2-6 … intraday --missing`.
+
 **Asked 2026-11-03, waiting for the user:**
 - A git remote for Drishti (none is configured; "push" is not possible yet). A private repo is recommended.
 - `drishti/data/live_quote.py` (committed `7b9b11a` from another session on user order) calls the Upstox quote API from the chart during market hours with Prajna's shared token: keep, restrict to after 15:35, or remove.
