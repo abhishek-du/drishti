@@ -168,7 +168,8 @@ async def store_hits(s, rid, day, tf: str, bar_time, key: str, sym, hs: list[dic
               if v.get("first") is not None} if stamps is not None else {}
         hctx = {**ctx, "zones_used": zu, "target": z["target"], "target_basis": z["target_basis"],
                 "net_rr_r1": z["net_rr_r1"], "net_rr_target": z["net_rr_target"],
-                "low_rr": z["low_rr"], "tags": ["low R:R"] if z["low_rr"] else []}
+                "low_rr": z["low_rr"], "broken_r1": z["broken_r1"], "net_r_at_r1": z["net_r_at_r1"],
+                "tags": z["tags"]}
         i = (await s.execute(text("""insert into scan_alert(run_id, session_date, tf, bar_time,
             instrument_key, symbol, detector, version, entry_ref, stop, r1, r2, rr_r1, qty,
             capital, risk_pct, cost_r, atr, context) values (:r, :d, :tf, :bt, :k, :sym, :det,

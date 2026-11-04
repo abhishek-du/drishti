@@ -13,6 +13,7 @@ GST = 0.18
 DP = 20.0                   # per ISIN per sell day, + GST (Upstox tariff assumption)
 SLIPPAGE_BPS = (5, 10, 20)  # per side; base = 10
 BASE_SLIPPAGE_BPS = 10
+MODEL = "costs drishti-swing-v1 s7 (frozen 2026-10-28), base slippage 10 bps/side"  # a label only
 
 
 @dataclass(frozen=True)

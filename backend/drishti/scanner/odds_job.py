@@ -8,8 +8,11 @@ knowledge cut (context.as_of = the 19:45 EOD scan of its session, else 19:45 IST
 session), so a run tonight, tomorrow or next month gives the same result. The plan is the one
 the grader uses: entry = entry_ref, stop, target = detect.choose_target (R1 if its net R:R
 >= 1, else R2, else 2R), horizon 5 sessions, the alert's qty; plus the user's 'took' entry when
-the journal has one. An alert (basis) that already has a row of this version is skipped, except
-a 'took' row whose entry changed. Engine and seeds: Track B's (seed = SEED + alert id).
+the journal has one. Idempotent: an alert (basis) that already has a row of this version with the
+same plan (entry, stop, target) is skipped, so a re-run never duplicates; a changed plan (a new
+target rule, an edited 'took' entry) appends a new row, and the newest row per (alert, basis) is
+the one shown (view odds_latest). Only 1d alerts: the daily engine misrepresents a 15m trade, so
+15m alerts are shown as "odds pending: 15m engine" (no row). Engine and seeds: Track B's (seed = SEED + alert id).
 
 This wraps the engine instead of `python -m drishti.judge.odds --alerts --store`, which writes
 JSONL only and cuts the data at the next morning 09:00 (not reproducible when run the same
@@ -29,7 +32,13 @@ from drishti.core.clock import IST, today
 from drishti.core.db import prajna_sessionmaker, sessionmaker
 from drishti.data import bars
 from drishti.judge import odds as O
+from drishti.core import costs
 from drishti.scanner.detect import choose_target
+from drishti.scanner.grade import HOLD
+
+# the swing horizon of a 1d alert = its grading time-out (scanner/grade.HOLD["1d"], 5 sessions);
+# Track B's alert_plans uses the same 5 (Plan.horizon)
+HORIZON = HOLD["1d"]
 
 
 def verdict_kind(v: str) -> str:
@@ -52,11 +61,11 @@ def plans_for(a: dict) -> list[O.Plan]:
         return []
     t = choose_target(e, st, a["r1"], a["r2"], a["qty"] or 0)["target"]
     as_of = a["session_date"] + _dt.timedelta(days=1)   # the engine reads bars < as_of
-    out = [O.Plan(a["instrument_key"], as_of, e, st, t, 5, a["qty"], a["symbol"], a["id"],
+    out = [O.Plan(a["instrument_key"], as_of, e, st, t, HORIZON, a["qty"], a["symbol"], a["id"],
                   "alert")]
     ae = a.get("actual_entry")
     if a.get("status") == "took" and ae and st < float(ae) < t:
-        out.append(O.Plan(a["instrument_key"], as_of, float(ae), st, t, 5,
+        out.append(O.Plan(a["instrument_key"], as_of, float(ae), st, t, HORIZON,
                           a.get("actual_qty") or a["qty"], a["symbol"], a["id"], "took"))
     return out
 
@@ -66,9 +75,10 @@ async def run(s, ps, rid, session: _dt.date, n_paths: int = 10_000) -> dict:
         select a.*, j.status, j.actual_entry, j.actual_qty from scan_alert a
         left join journal_entry j on j.alert_id = a.id
         where a.tf = '1d' and a.session_date = :d order by a.id"""), {"d": session})).mappings()]
-    done = {(r[0], r[1]): r[2] for r in (await s.execute(text("""
-        select distinct on (alert_id, basis) alert_id, basis, entry from odds_result
-        where version = :v and alert_id = any(:i) order by alert_id, basis, created_at desc"""),
+    done = {(r[0], r[1]): (float(r[2]), float(r[3]), float(r[4])) for r in (await s.execute(text("""
+        select distinct on (alert_id, basis) alert_id, basis, entry, stop, target from odds_result
+        where version = :v and alert_id = any(:i) and params ? 'cost_model'
+        order by alert_id, basis, created_at desc"""),
         {"v": O.VERSION, "i": [a["id"] for a in alerts]})).all()}
     sha = O.code_sha()
     out = {"session": str(session), "alerts": len(alerts), "stored": 0, "skipped": 0,
@@ -78,14 +88,15 @@ async def run(s, ps, rid, session: _dt.date, n_paths: int = 10_000) -> dict:
         b = None
         for pl in plans_for(a):
             prev = done.get((pl.alert_id, pl.basis))
-            if prev is not None and (pl.basis == "alert" or float(prev) == pl.entry):
+            if prev is not None and all(abs(x - y) < 1e-3 for x, y in
+                                        zip(prev, (pl.entry, pl.stop, pl.target))):
                 out["skipped"] += 1
                 continue
             if b is None:
                 b = await bars.official(ps, a["session_date"], int(750 * 1.6) + 60, as_of=cut,
                                         keys=[a["instrument_key"]])
             prm = O.Params(n_paths=n_paths, seed=O.SEED + a["id"],
-                           extra={"data_as_of": cut.isoformat()})
+                           extra={"data_as_of": cut.isoformat(), "cost_model": costs.MODEL})
             res = O.odds(pl, b, prm)
             res["code_sha"] = sha
             r = O.row(res)

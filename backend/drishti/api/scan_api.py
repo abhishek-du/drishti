@@ -25,6 +25,8 @@ from drishti.core.db import sessionmaker
 from drishti.scanner.detect import DETECTORS, LABEL, VERSION
 
 router = APIRouter()
+# the daily odds engine misrepresents a 15m trade (Track B): 15m alerts are not scored with it
+ODDS_15M = {"status": "odds pending: 15m engine"}
 
 ALERT_COLS = """a.id, a.session_date, a.tf, a.bar_time, a.instrument_key, a.symbol, a.detector,
     a.version, a.entry_ref, a.stop, a.r1, a.r2, a.rr_r1, a.qty, a.capital, a.risk_pct, a.cost_r,
@@ -55,8 +57,7 @@ def _with_target(a: dict) -> dict:
     if a.get("entry_ref") is None or a.get("stop") is None:
         return a
     ct = choose_target(a["entry_ref"], a["stop"], a.get("r1"), a.get("r2"), a.get("qty") or 0)
-    return {**a, **{k: (round(v, 4) if isinstance(v, float) else v) for k, v in ct.items()},
-            "tags": ["low R:R"] if ct["low_rr"] else []}
+    return {**a, **{k: (round(v, 4) if isinstance(v, float) else v) for k, v in ct.items()}}
 
 
 @router.get("/api/scan/alerts")
@@ -67,9 +68,12 @@ async def alerts(date: _dt.date | None = None, tf: Literal["1d", "15m"] | None =
     async with sessionmaker()() as s:
         day = date or (await s.execute(text("select max(session_date) from scan_alert"))).scalar()
         rows = [] if day is None else (await s.execute(text(f"""
-            select {ALERT_COLS}, o.outcome, o.r_net from scan_alert a
+            select {ALERT_COLS}, o.outcome, o.r_net, ol.p_target_mc as odds_p_target,
+                   ol.breakeven as odds_breakeven, ol.thin_sample as odds_thin_sample,
+                   left(ol.verdict, 120) as odds_verdict from scan_alert a
             left join journal_entry j on j.alert_id = a.id
             left join ({LATEST}) o on o.alert_id = a.id and o.basis = 'alert'
+            left join odds_latest ol on ol.alert_id = a.id and ol.basis = 'alert'
             where a.session_date = :d and (cast(:tf as text) is null or a.tf = :tf)
               and (cast(:det as text) is null or a.detector = :det)
             order by a.bar_time desc, a.detector, a.symbol"""),
@@ -77,7 +81,10 @@ async def alerts(date: _dt.date | None = None, tf: Literal["1d", "15m"] | None =
         dates = [str(d) for d in (await s.execute(text("""select distinct session_date
             from scan_alert order by 1 desc limit 60"""))).scalars()]
     return {"label": LABEL, "version": VERSION, "session": _j(day), "dates": dates,
-            "detectors": list(DETECTORS), "alerts": [_with_target(_row(r)) for r in rows]}
+            "detectors": list(DETECTORS),
+            "alerts": [{**x, "odds_status": "odds pending: 15m engine" if x["tf"] == "15m" else
+                        ("scored" if x.get("odds_verdict") else "odds pending: not scored yet")}
+                       for x in (_with_target(_row(r)) for r in rows)]}
 
 
 @router.get("/api/scan/alert/{alert_id}")
@@ -94,10 +101,8 @@ async def alert(alert_id: int) -> dict:
                              {"i": alert_id})).mappings().all()
         ev = (await s.execute(text("""select change, at from journal_event where alert_id = :i
             order by at"""), {"i": alert_id})).mappings().all()
-        od = (await s.execute(text("""select distinct on (basis) basis, as_of, entry, stop,
-            target, horizon, qty, version, seed, params, pool, mc, replay, p_target_mc,
-            breakeven, verdict, label, caveat, data_as_of, created_at from odds_result
-            where alert_id = :i order by basis, created_at desc, id desc"""),
+        od = (await s.execute(text("""select l.*, o.mc, o.replay, o.pool, o.params
+            from odds_latest l join odds_result o on o.id = l.id where l.alert_id = :i"""),
             {"i": alert_id})).mappings().all()
     a = _with_target(_row(a))
     risk = a["entry_ref"] - a["stop"]
@@ -106,7 +111,9 @@ async def alert(alert_id: int) -> dict:
     a["r2_rr"] = round((a["r2"] - a["entry_ref"]) / risk, 2) if a["r2"] and risk > 0 else None
     return {"label": LABEL, "alert": a, "grades": {r["basis"]: _row(r) for r in g},
             "journal_history": [_row(e) for e in ev],
-            "odds": {r["basis"]: _row(r) for r in od}}
+            "odds": ODDS_15M if a["tf"] == "15m" else
+            ({r["basis"]: _row(r) for r in od} or {"status": "odds pending: not scored yet "
+                                                   "(nightly odds job, 20:15)"})}
 
 
 class JournalIn(BaseModel):

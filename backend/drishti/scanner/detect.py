@@ -87,35 +87,49 @@ def levels_for(detector: str, high_t: float, low_ref: float, atr: float, zs: lis
 
 
 MIN_NET_RR = 1.0
+STOP_SLIP_R = 1.2               # = the odds engine's slip_r: a stop exit is booked at -1.2 R
+
+
+def net_r_at(entry: float, stop: float, exit_px: float, qty: int) -> float:
+    """Net R of one exit under the backtester cost model (costs.round_trip, base slippage)."""
+    risk = entry - stop
+    return (exit_px - entry) / risk - costs.round_trip(entry, exit_px, qty) / qty / risk
 
 
 def net_rr(entry: float, stop: float, target: float, qty: int) -> float | None:
-    """Net reward:risk under the backtester's cost model (drishti.core.costs.round_trip at the
-    base slippage; the stop at -1 R): (R at target - costs) / (1 R + costs at the stop)."""
+    """Net reward:risk as the odds engine computes it: net R at the target / |net R at a stop
+    booked at -STOP_SLIP_R R| (round-trip costs on both, base slippage)."""
     risk = entry - stop
     if not (risk > 0 and qty and target > entry):
         return None
-    win = (target - entry) / risk - costs.round_trip(entry, target, qty) / qty / risk
-    loss = 1 + costs.round_trip(entry, stop, qty) / qty / risk
-    return win / loss
+    loss = net_r_at(entry, stop, entry - STOP_SLIP_R * risk, qty)
+    return net_r_at(entry, stop, target, qty) / -loss
 
 
 def choose_target(entry: float, stop: float, r1, r2, qty: int) -> dict:
-    """The target the grader and the odds use (user 2026-11-04): R1 when its net R:R >= 1, else
-    R2 when that is >= 1, else entry + 2R. An alert whose R1 fails is tagged low_rr (R1 and R2
-    stay as levels). Works on any stored alert (old rows included): only stored fields."""
+    """The actionable target (user 2026-11-04), used by the grader, the odds and the API:
+    R1 when its net R:R >= MIN_NET_RR; else R2 when that clears it; else entry + 2R. R1 and R2
+    stay as reference levels. Tags: "broken R1" when even a hit at R1 is <= 0 net R (it does not
+    clear costs), "low R:R" when R1 is net positive but below MIN_NET_RR. Uses stored fields
+    only, so it applies to old alerts as well."""
     risk = entry - stop
     r1 = float(r1) if r1 is not None else None
     r2 = float(r2) if r2 is not None else None
-    n1 = net_rr(entry, stop, r1, qty) if r1 is not None else None
+    qty = int(qty or 0)
+    n1 = net_rr(entry, stop, r1, qty) if r1 is not None and r1 > entry else None
+    nr1 = net_r_at(entry, stop, r1, qty) if r1 is not None and qty and risk > 0 else None
     for basis, t in (("R1", r1), ("R2", r2)):
         if t is not None and t > entry and (net_rr(entry, stop, t, qty) or 0) >= MIN_NET_RR:
             break
     else:
         basis, t = "2R", entry + 2 * risk
-    return {"target": t, "target_basis": basis, "net_rr_r1": n1,
-            "net_rr_target": net_rr(entry, stop, t, qty),
-            "low_rr": n1 is not None and n1 < MIN_NET_RR}
+    broken = r1 is not None and (nr1 is None or nr1 <= 0)
+    low = r1 is not None and not broken and (n1 or 0) < MIN_NET_RR
+    tags = ["broken R1"] if broken else ["low R:R"] if low else []
+    return {"target": t, "target_basis": basis, "net_rr_r1": n1, "net_r_at_r1": nr1,
+            "net_rr_target": net_rr(entry, stop, t, qty), "low_rr": broken or low,
+            "broken_r1": broken, "tags": tags, "cost_model": costs.MODEL,
+            "stop_slip_r": STOP_SLIP_R}
 
 
 def size(h: dict, capital: float, risk_pct: float) -> dict:

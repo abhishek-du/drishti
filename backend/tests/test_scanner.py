@@ -261,3 +261,21 @@ def test_odds_job_plan_and_data_cut_are_point_in_time():
     assert ps[0].as_of == dt.date(2026, 11, 3)                        # bars < as_of only
     assert odds_job.verdict_kind("Net R:R 1.1 needs ... Base rates LOSE on this") == \
         "BASE RATES LOSE"
+
+
+def test_broken_r1_tag_and_reference_levels_kept():
+    # MARINE 2026-11-04 15m: entry 428.21, stop 414.69, R1 429.69 (0.11 R gross, 0.14 R costs)
+    ct = detect.choose_target(428.21, 414.69, 429.69, None, 739)
+    assert ct["broken_r1"] and ct["tags"] == ["broken R1"] and ct["net_r_at_r1"] <= 0
+    assert ct["target_basis"] == "2R" and ct["target"] == pytest.approx(428.21 + 2 * 13.52)
+    # a net-positive but thin R1 is "low R:R", not broken
+    ct = detect.choose_target(100.0, 95.0, 104.0, 112.0, 2000)
+    assert ct["tags"] == ["low R:R"] and ct["net_r_at_r1"] > 0 and ct["target_basis"] == "R2"
+    assert ct["cost_model"].startswith("costs drishti-swing-v1") and ct["stop_slip_r"] == 1.2
+
+
+def test_15m_alerts_are_not_scored_by_the_daily_engine():
+    from drishti.api import scan_api
+    from drishti.scanner import odds_job
+    assert scan_api.ODDS_15M == {"status": "odds pending: 15m engine"}
+    assert odds_job.HORIZON == grade.HOLD["1d"] == 5
