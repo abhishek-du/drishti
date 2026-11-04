@@ -1052,3 +1052,4 @@ pre.terminal {
 .kc-pit { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
 .kc-pit .tog { font-weight: 600; color: var(--fg-secondary); }
 .d5note { margin: 0 0 10px; padding: 6px 10px; font-size: 12.5px; border-radius: 6px; color: var(--fg-secondary); background: var(--warn-bg); border: 1px dashed var(--warn-border); }
+.kc-legend-line { flex-basis: 100%; font-size: 11px; color: var(--muted); }

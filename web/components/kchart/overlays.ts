@@ -86,48 +86,46 @@ const zones: OverlayTemplate = {
   },
 };
 
-// Drishti candle-pattern marker under a bar (point = the bar's low; extendData = {bull}): a small
-// triangle only, so markers never collide; the pattern names show in the legend on hover and in
-// the bar card on click
+// Drishti candlestick-pattern glyph (context only, not a signal): small and muted so the alert
+// levels stay dominant. extendData = {kind}: bull ▲ under the low, bear ▼ over the high, neutral ·
 const pattern: OverlayTemplate = {
   name: "d_pat", totalStep: 2, lock: true, needDefaultPointFigure: false,
   createPointFigures: ({ coordinates, overlay }) => {
-    const e = (overlay.extendData ?? {}) as { bull?: boolean };
+    const k = ((overlay.extendData ?? {}) as { kind?: string }).kind ?? "neutral";
     const { x, y } = coordinates[0];
-    return [{ type: "polygon", ignoreEvent: true, attrs: { coordinates: [{ x, y: y + 5 }, { x: x - 3.5, y: y + 11 }, { x: x + 3.5, y: y + 11 }] },
-      styles: { style: "fill", color: e.bull ? "#12b886" : "#868e96" } }];
+    if (k === "neutral") return [{ type: "circle", ignoreEvent: true, attrs: { x, y: y + 7, r: 1.8 }, styles: { style: "fill", color: "rgba(134,142,150,.6)" } }];
+    const tri = k === "bull" ? [{ x, y: y + 5 }, { x: x - 3, y: y + 10 }, { x: x + 3, y: y + 10 }] : [{ x, y: y - 5 }, { x: x - 3, y: y - 10 }, { x: x + 3, y: y - 10 }];
+    return [{ type: "polygon", ignoreEvent: true, attrs: { coordinates: tri },
+      styles: { style: "fill", color: k === "bull" ? "rgba(18,184,134,.55)" : "rgba(224,49,49,.5)" } }];
   },
 };
 
-// Drishti pattern marker (server-side, causal; point = the bar's low for bull, high for bear /
-// caution; extendData = {text, kind}). Pattern - not a prediction; 'caution' (a bear pattern in an
-// uptrend) is a faint note only, not a trade marker.
+// confirmed-pattern tag (server-side, causal; point = the bar's low for bull, high for bear /
+// caution; extendData = {text, kind}): muted text, no arrow glyph and no buy/sell wording;
+// context only. 'caution' (a bear pattern in an uptrend) is fainter still.
 const signal: OverlayTemplate = {
   name: "d_signal", totalStep: 2, lock: true, needDefaultPointFigure: false,
   createPointFigures: ({ coordinates, overlay }) => {
     const e = (overlay.extendData ?? {}) as { text?: string; kind?: "bull" | "bear" | "caution" };
     const { x, y } = coordinates[0];
-    if (e.kind === "caution") return [{ type: "text", ignoreEvent: true,
-      attrs: { x, y: y - 6, text: `caution · ${e.text ?? ""}`, align: "center", baseline: "bottom" },
-      styles: { color: "rgba(138,148,166,.75)", backgroundColor: "transparent", size: 9, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } }];
     const bull = e.kind === "bull";
+    const color = e.kind === "caution" ? "rgba(138,148,166,.7)" : bull ? "rgba(18,150,110,.9)" : "rgba(200,60,60,.85)";
     return [{ type: "text", ignoreEvent: true,
-      attrs: { x, y: y + (bull ? 6 : -6), text: `${bull ? "▲" : "▼"} ${e.text ?? ""}`, align: "center", baseline: bull ? "top" : "bottom" },
-      styles: { color: "#ffffff", backgroundColor: bull ? "rgba(16,185,129,.9)" : "rgba(244,63,94,.85)", borderRadius: 3,
-        paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1, size: 9 } }];
+      attrs: { x, y: y + (bull ? 13 : -13), text: `${e.kind === "caution" ? "caution · " : "✓ "}${e.text ?? ""}`, align: "center", baseline: bull ? "top" : "bottom" },
+      styles: { color, backgroundColor: "transparent", size: 9, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } }];
   },
 };
 
-// the stop of a bull pattern marker: a short dashed line at the signal bar's low (extendData = label)
+// a confirmed bull pattern tag's reference level: a short faint dashed line at the pattern bar's low
 const stop: OverlayTemplate = {
   name: "d_stop", totalStep: 3, lock: true, needDefaultPointFigure: false,
   createPointFigures: ({ coordinates, overlay }) => {
     if (coordinates.length < 2) return [];
     const [a, b] = coordinates as Coord[];
     return [
-      { type: "line", ignoreEvent: true, attrs: { coordinates: [a, { x: b.x, y: a.y }] }, styles: { style: "dashed", size: 1, color: "#e03131", dashedValue: [4, 3] } },
+      { type: "line", ignoreEvent: true, attrs: { coordinates: [a, { x: b.x, y: a.y }] }, styles: { style: "dashed", size: 1, color: "rgba(224,49,49,.45)", dashedValue: [3, 3] } },
       { type: "text", ignoreEvent: true, attrs: { x: b.x + 3, y: a.y, text: String(overlay.extendData ?? "stop"), align: "left", baseline: "middle" },
-        styles: { color: "#e03131", backgroundColor: "transparent", size: 9, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } },
+        styles: { color: "rgba(224,49,49,.6)", backgroundColor: "transparent", size: 9, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } },
     ];
   },
 };
@@ -141,9 +139,9 @@ const level: OverlayTemplate = {
     const y = coordinates[0].y, color = e.color ?? "#3a86ff";
     return [
       { type: "line", ignoreEvent: true, attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] },
-        styles: { style: e.dashed ? "dashed" : "solid", size: 1.5, color, dashedValue: [6, 4] } },
+        styles: { style: e.dashed ? "dashed" : "solid", size: 2.5, color, dashedValue: [8, 4] } },
       { type: "text", ignoreEvent: true, attrs: { x: bounding.width - 6, y: y - 2, text: e.label ?? "", align: "right", baseline: "bottom" },
-        styles: { color: "#fff", backgroundColor: color, size: 11, paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1, borderRadius: 2 } },
+        styles: { color: "#fff", backgroundColor: color, size: 12, weight: "bold", paddingLeft: 5, paddingRight: 5, paddingTop: 2, paddingBottom: 2, borderRadius: 3 } },
     ];
   },
 };
@@ -172,9 +170,9 @@ const mark: OverlayTemplate = {
   createPointFigures: ({ coordinates, overlay }) => {
     const { x, y } = coordinates[0];
     return [
-      { type: "polygon", ignoreEvent: true, attrs: { coordinates: [{ x, y: y - 6 }, { x: x - 6, y: y - 16 }, { x: x + 6, y: y - 16 }] }, styles: { style: "fill", color: "#f59f00" } },
-      { type: "text", ignoreEvent: true, attrs: { x, y: y - 18, text: String(overlay.extendData ?? "alert"), align: "center", baseline: "bottom" },
-        styles: { color: "#f59f00", backgroundColor: "transparent", size: 11, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } },
+      { type: "polygon", ignoreEvent: true, attrs: { coordinates: [{ x, y: y - 6 }, { x: x - 9, y: y - 21 }, { x: x + 9, y: y - 21 }] }, styles: { style: "stroke_fill", color: "#f59f00", borderColor: "#fff", borderSize: 1 } },
+      { type: "text", ignoreEvent: true, attrs: { x, y: y - 23, text: String(overlay.extendData ?? "ALERT"), align: "center", baseline: "bottom" },
+        styles: { color: "#fff", backgroundColor: "#f59f00", size: 11, weight: "bold", paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1, borderRadius: 3 } },
     ];
   },
 };

@@ -176,6 +176,7 @@ def compute(df: pd.DataFrame, tf: str) -> dict:
         "candles": [{"time": t[i], "flags": names[on[i]].tolist()}
                     for i in range(len(df)) if on[i].any()],
         "bullish_flags": list(candles.BULLISH),
+        "bearish_flags": list(chart_markers.BEARISH),
         "markers": {"label": chart_markers.LABEL, "note": chart_markers.NOTE,
                     "items": [{"time": t[m["i"]], "kind": m["kind"], "flags": m["flags"],
                                "stop": _f(m["stop"]) if m["stop"] is not None else None}
