@@ -18,6 +18,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
+from drishti.api import chart_markers
 from drishti.api.chart_bias import bias
 from drishti.api.chart_data import TFS, get_live_quote, load
 from drishti.core.db import prajna_sessionmaker, sessionmaker
@@ -162,6 +163,7 @@ def compute(df: pd.DataFrame, tf: str) -> dict:
     names, on = np.array(candles.FLAGS), fl.to_numpy()
     chg = df.close.pct_change() * 100
     hs = hindsight(df)
+    mk = chart_markers.markers(df, ind, fl)
     return {
         "bars": [{"time": t[i], "open": _f(r.open), "high": _f(r.high), "low": _f(r.low),
                   "close": _f(r.close), "volume": _f(r.volume), "chg_pct": _f(chg.iloc[i]),
@@ -174,6 +176,10 @@ def compute(df: pd.DataFrame, tf: str) -> dict:
         "candles": [{"time": t[i], "flags": names[on[i]].tolist()}
                     for i in range(len(df)) if on[i].any()],
         "bullish_flags": list(candles.BULLISH),
+        "markers": {"label": chart_markers.LABEL, "note": chart_markers.NOTE,
+                    "items": [{"time": t[m["i"]], "kind": m["kind"], "flags": m["flags"],
+                               "stop": _f(m["stop"]) if m["stop"] is not None else None}
+                              for m in mk]},
         "zones": [{k: (_f(v) if isinstance(v, float) else v) for k, v in z.items()}
                   | {"first": t[z["first"]], "last": t[z["last"]]} for z in zs],
         "trend": tr,

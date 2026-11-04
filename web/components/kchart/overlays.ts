@@ -99,36 +99,36 @@ const pattern: OverlayTemplate = {
   },
 };
 
-// Drishti Buy/Sell Signal label (point = the bar's low for BUY, high for SELL)
+// Drishti pattern marker (server-side, causal; point = the bar's low for bull, high for bear /
+// caution; extendData = {text, kind}). Pattern - not a prediction; 'caution' (a bear pattern in an
+// uptrend) is a faint note only, not a trade marker.
 const signal: OverlayTemplate = {
   name: "d_signal", totalStep: 2, lock: true, needDefaultPointFigure: false,
   createPointFigures: ({ coordinates, overlay }) => {
-    const e = (overlay.extendData ?? {}) as { text?: string; side?: "BUY" | "SELL"; isFollow?: boolean };
-    const isBuy = e.side === "BUY";
-    const bg = isBuy
-      ? (e.isFollow ? "rgba(5, 150, 105, 0.95)" : "rgba(16, 185, 129, 0.9)")
-      : (e.isFollow ? "rgba(225, 29, 72, 0.95)" : "rgba(244, 63, 94, 0.9)");
-    const yOffset = isBuy ? 6 : -18;
-    return [{
-      type: "text", ignoreEvent: true,
-      attrs: {
-        x: coordinates[0].x,
-        y: coordinates[0].y + yOffset,
-        text: isBuy ? `▲ ${e.text ?? "BUY"}` : `▼ ${e.text ?? "SELL"}`,
-        align: "center",
-        baseline: isBuy ? "top" : "bottom",
-      },
-      styles: {
-        color: "#ffffff",
-        backgroundColor: bg,
-        borderRadius: 3,
-        paddingLeft: 4,
-        paddingRight: 4,
-        paddingTop: 1,
-        paddingBottom: 1,
-        size: 9,
-      },
-    }];
+    const e = (overlay.extendData ?? {}) as { text?: string; kind?: "bull" | "bear" | "caution" };
+    const { x, y } = coordinates[0];
+    if (e.kind === "caution") return [{ type: "text", ignoreEvent: true,
+      attrs: { x, y: y - 6, text: `caution · ${e.text ?? ""}`, align: "center", baseline: "bottom" },
+      styles: { color: "rgba(138,148,166,.75)", backgroundColor: "transparent", size: 9, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } }];
+    const bull = e.kind === "bull";
+    return [{ type: "text", ignoreEvent: true,
+      attrs: { x, y: y + (bull ? 6 : -6), text: `${bull ? "▲" : "▼"} ${e.text ?? ""}`, align: "center", baseline: bull ? "top" : "bottom" },
+      styles: { color: "#ffffff", backgroundColor: bull ? "rgba(16,185,129,.9)" : "rgba(244,63,94,.85)", borderRadius: 3,
+        paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1, size: 9 } }];
+  },
+};
+
+// the stop of a bull pattern marker: a short dashed line at the signal bar's low (extendData = label)
+const stop: OverlayTemplate = {
+  name: "d_stop", totalStep: 3, lock: true, needDefaultPointFigure: false,
+  createPointFigures: ({ coordinates, overlay }) => {
+    if (coordinates.length < 2) return [];
+    const [a, b] = coordinates as Coord[];
+    return [
+      { type: "line", ignoreEvent: true, attrs: { coordinates: [a, { x: b.x, y: a.y }] }, styles: { style: "dashed", size: 1, color: "#e03131", dashedValue: [4, 3] } },
+      { type: "text", ignoreEvent: true, attrs: { x: b.x + 3, y: a.y, text: String(overlay.extendData ?? "stop"), align: "left", baseline: "middle" },
+        styles: { color: "#e03131", backgroundColor: "transparent", size: 9, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 } },
+    ];
   },
 };
 
@@ -165,7 +165,7 @@ let registered = false;
 export function registerOverlays() {
   if (registered) return;
   registered = true;
-  [rect, measure, note, zones, pattern, signal, level, mark].forEach((o) => registerOverlay(o));
+  [rect, measure, note, zones, pattern, signal, stop, level, mark].forEach((o) => registerOverlay(o));
 }
 
 // --- user drawings: saved per stock and timeframe in this browser (no DB writes) -------------

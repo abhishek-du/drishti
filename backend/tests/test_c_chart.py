@@ -316,3 +316,62 @@ def test_trend_detail_matches_levels_trend():
 def test_bars_carry_trend_detail(client):
     j = client.get("/api/chart2/bars", params={"key": "K", "tf": "1d"}).json()
     assert j["trend_detail"]["class"] == j["trend"] and "conditions" in j["trend_detail"]
+
+
+# --- pattern markers (server-side, causal) ------------------------------------------------------
+
+def _markers(df):
+    from drishti.api import chart_markers
+    from drishti.features import candles
+    df = df.reset_index(drop=True)
+    ind = indicators.basic(df)
+    fl = candles.flags(pd.concat([df, ind[["atr"]]], axis=1))
+    return chart_markers.markers(df, ind, fl), ind
+
+
+def test_markers_never_repaint():
+    """A marker on bar j is identical in every prefix that holds bar j (zones known on bar j,
+    not today's), and no prefix has a marker the full series lacks."""
+    total = 0
+    for seed in (2, 13):          # seeds where today's zones would change markers (mutation-checked)
+        df = _bars(320, seed=seed)
+        full, _ = _markers(df)
+        total += len(full)
+        key = lambda ms: {(m["i"], m["kind"], tuple(m["flags"]), m["stop"]) for m in ms}  # noqa: E731
+        for k in range(30, len(df)):
+            pre, _ = _markers(df.iloc[:k + 1])
+            assert key(pre) == {x for x in key(full) if x[0] <= k}, (seed, k)
+    assert total > 0
+
+
+def test_markers_stop_and_caution():
+    from drishti.api.chart_markers import BEARISH
+    from drishti.features import candles
+    seen = set()
+    for seed in range(1, 9):
+        df = _bars(400, seed=seed)
+        ms, ind = _markers(df)
+        c = df.close.to_numpy()
+        for m in ms:
+            j, i = m["i"], m["i"] - 1
+            seen.add(m["kind"])
+            up = c[j] > ind.sma50.iloc[j] > ind.sma200.iloc[j]
+            if m["kind"] == "bull":
+                assert m["stop"] == df.low.iloc[i] and set(m["flags"]) <= set(candles.BULLISH)
+                assert c[j] > df.high.iloc[i]
+            else:
+                assert m["stop"] is None and set(m["flags"]) <= set(BEARISH)
+                assert (m["kind"] == "caution") == bool(up)     # no SELL marker in an uptrend
+    assert "bull" in seen
+
+
+def test_bars_carry_markers(client):
+    j = client.get("/api/chart2/bars", params={"key": "K", "tf": "1d"}).json()
+    mk = j["markers"]
+    assert "not a prediction" in mk["label"] and "drishti-swing-v1" in mk["label"]
+    assert "Scanner" in mk["note"]
+    times = {b["time"] for b in j["bars"]}
+    for m in mk["items"]:
+        assert m["time"] in times and m["kind"] in ("bull", "bear", "caution")
+        assert (m["stop"] is not None) == (m["kind"] == "bull")
+        assert not re.search(r"\b(buy|sell)\b", " ".join(m["flags"]).lower())
