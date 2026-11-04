@@ -269,6 +269,38 @@ web/ (Next.js + lightweight-charts)   ops/ (runbooks + systemd user units)   doc
 
 **What stays:** `judge/dsr.py` as an EXPLORATORY helper; any future candidate must clear DSR/SPA at N≈30 (Hammer section above). This decision does not touch the decision-support scanner (user tool, not an edge claim).
 
+## Telegram delivery and live outcome tracking (user, 2026-11-04)
+
+**Every message ends with:** "Decision support — not a validated edge, not a prediction. Paper only. Your call."
+
+- **Module:** `drishti/scanner/notify.py`. Credentials come from `.env` only; without them a message is just logged.
+- **Dedupe and rate:**
+  - One `notify_event` row per (kind, ref), claimed before the send.
+  - A failed send is retried by a later run, at most 3 attempts.
+  - At most 25 messages per job run, ≥ 1.1 s apart; the rest are folded into one summary line.
+  - Only sessions from **2026-11-05** on are sent, so the older alerts do not flood the chat.
+- **Messages:**
+  - **SCOUT_DIGEST:** one per EOD watchlist (in `scan_eod`, 19:45). It gives the count, added/dropped, the top 10 by RS with RS, % below the 52-week high and ATR %, the criteria every listed stock passed, and a regime / spec-gate OFF note.
+  - **RADAR_NEW:** one per new Live Radar name, with the time (the 15m bar), the criteria that flipped since T-1, and the radar label and D5 caveat.
+  - **ALERT:** one per scanner alert. It gives entry (ref), stop and the actionable target after the broken-R1 rule (never a broken R1), risk/share, gross and NET R:R, qty, the broken-R1 / low-R:R tag, a regime / spec-gate OFF note, and the D5 caveat on 15m.
+    - 1d alerts carry the odds line ("History: target-first ~x %, avg net R y, geometry …"). `scan_eod` scores the session's odds right after the scan; the 20:15 `odds` job is a backstop.
+    - 15m alerts say "Odds: pending (15m engine)".
+  - **OUTCOME:** one per alert, when its latest 'alert' grade is final. The wording is fixed:
+    - "target X reached …";
+    - "stop X hit …, exit Y";
+    - "expired, neither hit, closed Z …";
+    - "expired, entry not triggered (no trade)".
+
+    Each gives the time or date, the price and the net R. When the journal says watching/took, the message adds "Your marked trade" (with the user's own entry and net R when graded). "Prediction" wording is never used.
+- **Outcome tracking:**
+  - **15m alerts:** tracked live inside `scan_intraday` on the recorder's closed 15m bars, with the same grade function as the nightly grader. They are **flat by the end of the session**: the horizon is the bars left to the 15:15–15:30 bar (`grade.slots_left`).
+    - A live final grade (`journal_outcome.source = 'live'`) is never replaced by the nightly one.
+    - The nightly grader also uses only the alert's own session for 15m.
+  - **1d (swing) alerts:** graded by the nightly grader (09:45) on official daily bars, horizon 5 sessions, the odds engine's barrier rule.
+  - All alerts are tracked automatically, and every outcome goes to `journal_outcome` (journal stats, odds calibration).
+  - Every alert was regraded once on 11-04 under the 15m end-of-session rule.
+- **What did not change:** Scout, the scanner and the detection logic.
+
 ## Live Radar (user, 2026-11-04)
 
 **Label everywhere: "Intraday radar - decision support, not validated edge".** Part of the decision-support scanner. It does not change Scout `scout-b-v1`, the EOD watchlist, drishti-swing-v1 or any test.

@@ -84,6 +84,10 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **Cron lines not yet installed** (`ops/cron.txt`): `news` every 30 min, and the 3 scanner lines (`scan_eod` 19:45, `scan_intraday` every 15 min, `scan_grade` 09:45). The crontab has 13 Drishti lines now; with all four it becomes 17, and 18 with `intraday` (01:00).
 - **Telegram for the scanner:** optional; set `DRISHTI_TELEGRAM_BOT_TOKEN` and `DRISHTI_TELEGRAM_CHAT_ID` in `backend/.env` (otherwise the alert list is only logged).
 
+**Telegram (2026-11-04, DEVIATIONS D6):**
+- Drishti now sends to the bot and chat Prajna used: the Scout digest, Live Radar names, every alert and every outcome, from the 11-05 session on. A test message was sent and delivered on 11-04.
+- **Prajna's own Telegram is off:** its `.env` TELEGRAM lines are commented out. To undo, remove the prefix.
+
 **Known caveat (DEVIATIONS D5, 2026-11-04):**
 - Intraday (15m) scanner alerts use **unadjusted** 15m bars: Prajna's raw 15m plus the recorder's 1m.
 - For a stock with a split or bonus in the last ~25 days, its zone levels, R1/R2, stop and indicators can be wrong.

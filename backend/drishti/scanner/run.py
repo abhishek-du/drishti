@@ -272,7 +272,9 @@ async def scan_intraday(s, ps, rid, t: _dt.datetime) -> dict:
             for h in hs:
                 n_hits[h["detector"]] = n_hits.get(h["detector"], 0) + 1
     await s.commit()
+    track = await live_track_15m(s, rid, t.date(), df15, ps)
     return {"bar": last_closed.isoformat(), "keys": len(keys), "watchlist": len(wl),
+            "live_track": track,
             "radar_keys": len(radar_keys), "hits": n_hits, "alerts_new": len(ids),
             "alert_ids": ids, "radar": {k: v for k, v in radar_out.items() if k != "rows"},
             "radar_new": radar_out.get("rows", [])}
@@ -296,6 +298,10 @@ async def scan_grade(s, ps, rid, regrade_all: bool = False) -> dict:
         {"all": regrade_all})).mappings()]
     if not alerts:
         return {"graded": 0}
+    live_final = set((await s.execute(text("""
+        with l as (select distinct on (alert_id) alert_id, outcome, source from journal_outcome
+                   where basis = 'alert' order by alert_id, graded_at desc, id desc)
+        select alert_id from l where source = 'live' and outcome <> 'OPEN'"""))).scalars())
     cfg = get_settings()
     out = {"graded": 0, "outcomes": {}}
     d1 = [a for a in alerts if a["tf"] == "1d"]
@@ -316,25 +322,71 @@ async def scan_grade(s, ps, rid, regrade_all: bool = False) -> dict:
         g = frames.get((a["tf"], a["instrument_key"]))
         if g is None:
             continue
-        after = g[g.t > a["bar_time"].astimezone(IST)]
-        o, h, lo, c = (after[x].to_numpy(float) for x in ("open", "high", "low", "close"))
-        bases = ["alert", "placebo"]
-        if a["status"] == "took" and a["actual_entry"] is not None:
-            bases.append("took")
-        for basis in bases:
-            r = grade.grade(a, o, h, lo, c, basis,
-                            float(a["actual_entry"]) if basis == "took" else None,
-                            cfg.DRISHTI_SCAN_CAPITAL, cfg.DRISHTI_SCAN_RISK_PCT)
-            ix = r.get("exit_index")
-            await s.execute(text("""insert into journal_outcome(alert_id, run_id, basis, outcome,
-                entry_used, exit_price, exit_bar, target_used, r_gross, r_net, bars_used, seed)
-                values (:a, :r, :b, :o, :e, :x, :xb, :tg, :rg, :rn, :n, :seed)"""),
-                {"a": a["id"], "r": rid, "b": basis, "o": r["outcome"], "e": r.get("entry_used"),
-                 "x": r.get("exit_price"), "xb": after.t.iloc[ix] if ix is not None else None,
-                 "tg": r.get("target_used"), "rg": r.get("r_gross"), "rn": r.get("r_net"),
-                 "n": r.get("bars_used"), "seed": r.get("seed")})
-            out["outcomes"][r["outcome"]] = out["outcomes"].get(r["outcome"], 0) + 1
+        if a["tf"] == "15m" and a["id"] in live_final:
+            continue                       # the live tracker's final grade stands
+        res = await grade_alert(s, rid, a, g, cfg, "nightly")
+        for k in res:
+            out["outcomes"][k] = out["outcomes"].get(k, 0) + 1
         out["graded"] += 1
+    await s.commit()
+    return out
+
+
+async def grade_alert(s, rid, a: dict, g: pd.DataFrame, cfg, source: str,
+                      finals_only: bool = False) -> list[str]:
+    """Grade one alert on its bars `g` (t = bar start, IST) for every basis and store the rows.
+    15m: only the alert's own session, flat at its end. finals_only: store nothing while the
+    'alert' grade is still OPEN (the live tracker runs every 15 min)."""
+    after = g[g.t > a["bar_time"].astimezone(IST)]
+    hold = None
+    if a["tf"] == "15m":
+        after = after[after.t.dt.date == a["session_date"]]
+        hold = grade.slots_left(a["bar_time"])
+    o, h, lo, c = (after[x].to_numpy(float) for x in ("open", "high", "low", "close"))
+    bases = ["alert", "placebo"]
+    if a["status"] == "took" and a["actual_entry"] is not None:
+        bases.append("took")
+    res = {b: grade.grade(a, o, h, lo, c, b, float(a["actual_entry"]) if b == "took" else None,
+                          cfg.DRISHTI_SCAN_CAPITAL, cfg.DRISHTI_SCAN_RISK_PCT, hold)
+           for b in bases}
+    if finals_only and res["alert"]["outcome"] == "OPEN":
+        return []
+    for basis, r in res.items():
+        ix = r.get("exit_index")
+        await s.execute(text("""insert into journal_outcome(alert_id, run_id, basis, outcome,
+            entry_used, exit_price, exit_bar, target_used, r_gross, r_net, bars_used, seed,
+            source) values (:a, :r, :b, :o, :e, :x, :xb, :tg, :rg, :rn, :n, :seed, :src)"""),
+            {"a": a["id"], "r": rid, "b": basis, "o": r["outcome"], "e": r.get("entry_used"),
+             "x": r.get("exit_price"), "xb": after.t.iloc[ix] if ix is not None else None,
+             "tg": r.get("target_used"), "rg": r.get("r_gross"), "rn": r.get("r_net"),
+             "n": r.get("bars_used"), "seed": r.get("seed"), "src": source})
+    return [r["outcome"] for r in res.values()]
+
+
+async def live_track_15m(s, rid, day: _dt.date, df15: pd.DataFrame, ps) -> dict:
+    """Live outcome tracking of today's 15m alerts on the recorder's closed 15m bars (the same
+    grade function and rules as the nightly grader). A final grade is stored once (source
+    'live') and is not replaced by the nightly grader."""
+    alerts = [dict(r) for r in (await s.execute(text("""
+        with l as (select distinct on (alert_id) alert_id, outcome from journal_outcome
+                   where basis = 'alert' order by alert_id, graded_at desc, id desc)
+        select a.*, j.status, j.actual_entry, j.actual_qty from scan_alert a
+        left join journal_entry j on j.alert_id = a.id left join l on l.alert_id = a.id
+        where a.tf = '15m' and a.session_date = :d
+          and (l.outcome is null or l.outcome = 'OPEN')"""), {"d": day})).mappings()]
+    if not alerts:
+        return {"tracked": 0}
+    need = sorted({a["instrument_key"] for a in alerts} - set(df15.instrument_key.unique()))
+    if need:
+        df15 = pd.concat([df15, await bars15(ps, need, day - _dt.timedelta(days=1))])
+    cfg = get_settings()
+    out = {"tracked": len(alerts), "resolved": {}}
+    for k, g in df15.groupby("instrument_key"):
+        g = g.assign(t=g.t.dt.tz_convert(IST))
+        for a in (x for x in alerts if x["instrument_key"] == k):
+            res = await grade_alert(s, rid, a, g, cfg, "live", finals_only=True)
+            if res:
+                out["resolved"][res[0]] = out["resolved"].get(res[0], 0) + 1
     await s.commit()
     return out
 
@@ -354,13 +406,29 @@ async def main(cmd: str, args: list[str]) -> dict:
         try:
             if cmd == "scan_eod":
                 out = await scan_eod(s, ps, rid, day)
-                out["telegram"] = await notify.alerts(s, out.pop("alert_ids"), "EOD scan")
+                out.pop("alert_ids")
+                from drishti.scanner import odds_job      # odds first: the alert messages carry them
+                try:
+                    out["odds"] = {k: v for k, v in (await odds_job.run(s, ps, rid, day)).items()
+                                   if k in ("stored", "skipped")}
+                except Exception as e:                   # never block the scan or its messages
+                    await s.rollback()
+                    out["odds"] = {"failed": f"{type(e).__name__}: {e}"[:200]}
+                out["telegram"] = {"scout": await notify.deliver_scout(s, day),
+                                   "alerts": await notify.deliver_alerts(s, "1d"),
+                                   "summary": await notify.flush_batched(s, rid)}
             elif cmd == "scan_intraday":
                 out = await scan_intraday(s, ps, rid, t)
-                out["telegram"] = await notify.alerts(s, out.pop("alert_ids", []), "Intraday 15m")
-                out["telegram_radar"] = notify.radar(out.get("radar_new", []), out.get("bar", ""))
+                out.pop("alert_ids", None)
+                out["telegram"] = {"radar": await notify.deliver_radar(s, t.date()),
+                                   "alerts": await notify.deliver_alerts(s, "15m"),
+                                   "outcomes": await notify.deliver_outcomes(s),
+                                   "summary": await notify.flush_batched(s, rid)}
             elif cmd == "scan_grade":
                 out = await scan_grade(s, ps, rid, "--all" in args)
+                out["telegram"] = {"outcomes": await notify.deliver_outcomes(s),
+                                   "alerts": await notify.deliver_alerts(s),   # any left over
+                                   "summary": await notify.flush_batched(s, rid)}
             else:
                 raise SystemExit(__doc__)
         except BaseException as e:

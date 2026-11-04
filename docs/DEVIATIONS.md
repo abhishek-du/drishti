@@ -90,3 +90,25 @@ The user accepted in writing that **there is no full backup of the `prajna` data
 - **The 11-20 switch alone does not fix it.** After the switch the 15m bars come from Drishti's nightly intraday Parquet plus the recorder, which are also unadjusted.
 - The fix belongs in the re-point work (P1c item 4): the intraday read path applies Drishti's own CA factors.
 - Until then an alert could carry a `ca_in_window` flag; this is not built yet.
+
+## D6 (2026-11-04): Telegram delivery: an editable status column, Prajna's Telegram off, keys from V1's .env
+
+**What changed (user requests of 2026-11-04):**
+
+1. **`notify_event`** (migration 0012) is not append-only.
+   - Each message is claimed (inserted) before it is sent, so a re-run never repeats it.
+   - Its `status` / `attempts` / `sent_at` / `error` are updated after the send.
+   - The message `text` is never changed.
+
+2. **Prajna's Telegram messages are off** (user: "baaki jo prajna ke alert jaa rahe hai telegram par unko band krdo").
+   - In `prajna/backend/.env` the two lines `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` are commented out with the prefix `#DISABLED_2026-11-04_user#`.
+   - Every Prajna message goes through `ops/runbooks/telegram_notify.sh`, which reads `.env` on every call and logs `TELEGRAM_SKIPPED` without them (verified).
+   - No Prajna code, cron or DB change was made; the Prajna git tree is clean (`.env` is gitignored).
+   - **To undo:** remove the prefix.
+
+3. **Drishti's `DRISHTI_TELEGRAM_BOT_TOKEN` / `DRISHTI_TELEGRAM_CHAT_ID`** were copied into `drishti/backend/.env` (0600, gitignored) from `auto-trade-pro/autotrade-backend/.env`, on the user's explicit instruction.
+   - This was the only access to that directory. The file was read only, never written.
+   - No value was printed; the copies were checked by a sha256 prefix.
+   - It is the same bot and chat Prajna used.
+
+4. **Tests can never send:** `tests/conftest.py` forces both variables empty.

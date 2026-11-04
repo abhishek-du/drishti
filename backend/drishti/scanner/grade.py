@@ -20,7 +20,8 @@ import numpy as np
 from drishti.core import costs
 from drishti.strategies.orders import exit_path
 
-HOLD = {"1d": 5, "15m": 25}
+HOLD = {"1d": 5, "15m": 25}     # 15m: the default only; scan_grade / the live tracker pass the
+                                 # bars left in the alert's session (flat by the end of the day)
 SEED = 20261103
 
 
@@ -31,11 +32,24 @@ def _qty(entry: float, stop: float, qty: int | None, capital: float, risk_pct: f
     return max(1, int(capital * risk_pct / 100 // r)) if r > 0 else 0
 
 
+def slots_left(bar_start) -> int:
+    """15m bars after the alert's bar up to the 15:15-15:30 bar (user 2026-11-04: a 15m alert
+    is flat by the end of its session)."""
+    import datetime as _dt
+    from drishti.core.clock import IST
+    t = bar_start.astimezone(IST)
+    last = t.replace(hour=15, minute=15, second=0, microsecond=0)
+    return max(0, int((last - t).total_seconds() // 900))
+
+
 def grade(a: dict, o, h, lo, c, basis: str, actual_entry: float | None = None,
-          capital: float = 1e6, risk_pct: float = 1.0) -> dict:
+          capital: float = 1e6, risk_pct: float = 1.0, hold: int | None = None) -> dict:
     """a: the alert (entry_ref, stop, r1, qty); o/h/lo/c: the bars AFTER the detection bar."""
     stop = float(a["stop"])
     ref = float(a["entry_ref"])
+    hold = HOLD[a["tf"]] if hold is None else hold
+    if hold == 0:                               # no bar left in the session: no trade
+        return {"outcome": "NO_FILL", "bars_used": 0}
     if len(c) == 0:
         return {"outcome": "OPEN", "bars_used": 0}
     if basis == "alert":
@@ -58,7 +72,7 @@ def grade(a: dict, o, h, lo, c, basis: str, actual_entry: float | None = None,
     # the alert's target (R1, or R2 / 2R when R1's net R:R < 1); entry + 2R if the fill is
     # already above it
     target = t if t > entry else entry + 2 * risk
-    res = exit_path(o, h, lo, c, 0, stop, target, HOLD[a["tf"]])
+    res = exit_path(o, h, lo, c, 0, stop, target, hold)
     if res is None:
         return {"outcome": "OPEN", "bars_used": len(c), "entry_used": entry,
                 "target_used": target, "seed": seed}

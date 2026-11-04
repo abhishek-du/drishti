@@ -131,6 +131,9 @@ async def main(args: list[str]) -> dict:
         rid = await runlog.start(s, "SCAN_ODDS", day, {"args": args, "version": O.VERSION})
         try:
             out = await run(s, ps, rid, day, n)
+            from drishti.scanner import notify      # 1d alerts that waited for their odds
+            out["telegram"] = {"alerts": await notify.deliver_alerts(s, "1d"),
+                               "summary": await notify.flush_batched(s, rid)}
         except BaseException as e:
             await s.rollback()
             await runlog.end(s, rid, "FAILED", error=f"{type(e).__name__}: {e}"[:500])

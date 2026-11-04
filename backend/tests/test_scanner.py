@@ -115,26 +115,63 @@ def test_agg15_buckets_from_0915_ist():
     assert (first.open, first.high, first.low, first.close, first.volume) == (0, 15, -1, 14.5, 15)
 
 
-def test_notify_logs_without_telegram_key(monkeypatch):
-    from drishti.core import config
-    msg = notify.message("EOD scan", [{"symbol": "ABC", "instrument_key": "K", "detector": "X",
-                                       "tf": "1d", "entry_ref": 10, "stop": 9, "r1": None,
-                                       "rr_r1": None, "qty": 5}])
-    assert detect.LABEL in msg and "ABC X [1d]" in msg
-    monkeypatch.setenv("DRISHTI_TELEGRAM_BOT_TOKEN", "")
-    config.get_settings.cache_clear()
+def test_notify_texts_use_the_actionable_target_and_honest_wording():
+    import datetime as dt
+    a = {"id": 37, "tf": "15m", "symbol": "MARINE", "instrument_key": "K",
+         "detector": "BREAKOUT_52W", "session_date": dt.date(2026, 11, 5),
+         "bar_time": dt.datetime(2026, 11, 5, 4, 45, tzinfo=dt.timezone.utc),
+         "entry_ref": 428.21, "stop": 414.69, "r1": 429.69, "r2": None, "qty": 739,
+         "context": {"regime": "OFF", "spec_gate": "OFF"}}
+    t = notify.alert_text(a, None)
+    assert "Target 455.25 2R (R1 not actionable)" in t and "broken R1" in t
+    assert "Odds: pending (15m engine)" in t and "regime and spec gate OFF" in t
+    assert notify.LABEL in t and "D5" in t and "Risk/share 13.52" in t
+    o = {"outcome": "R1", "target_used": 455.25, "exit_price": 455.25, "r_net": 1.39,
+         "exit_bar": dt.datetime(2026, 11, 5, 5, 45, tzinfo=dt.timezone.utc)}
+    t = notify.outcome_text(a, o, None, "took at 428.50")
+    assert "target 455.25 reached 11:15–11:30 IST bar (net R 1.39)" in t
+    assert "Your marked trade (took at 428.50)" in t
+    assert "predict" not in t.lower().replace("not a prediction", "")
+    t = notify.outcome_text(a, {**o, "outcome": "TIMEOUT", "exit_price": 431.2, "r_net": -0.6},
+                            None, None)
+    assert "expired, neither hit, closed 431.20" in t and "(net R -0.60)" in t
+    t = notify.outcome_text(a, {**o, "outcome": "STOP", "exit_price": 414.69, "r_net": -1.07},
+                            None, None)
+    assert "stop 414.69 hit" in t
 
-    class S:
-        async def execute(self, *a, **k):
-            class R:
-                def mappings(self):
-                    return [{"symbol": "ABC", "instrument_key": "K", "detector": "X", "tf": "1d",
-                             "entry_ref": 10, "stop": 9, "r1": 12, "rr_r1": 2, "qty": 5}]
-            return R()
-    try:
-        assert asyncio.run(notify.alerts(S(), [1], "t")) == "not configured (logged)"
-    finally:
-        config.get_settings.cache_clear()
+
+def test_15m_horizon_is_the_rest_of_the_session():
+    import datetime as dt
+    from drishti.core.clock import IST
+    assert grade.slots_left(dt.datetime(2026, 11, 5, 10, 0, tzinfo=IST)) == 21
+    assert grade.slots_left(dt.datetime(2026, 11, 5, 15, 15, tzinfo=IST)) == 0
+    a = {"id": 1, "tf": "15m", "entry_ref": 100.0, "stop": 95.0, "r1": 120.0, "r2": None,
+         "qty": 2000}
+    assert grade.grade(a, *_bars([[99, 101, 98, 100]]), "alert", hold=0)["outcome"] == "NO_FILL"
+    r = grade.grade(a, *_bars([[99, 101, 98, 100], [100, 102, 99, 101]]), "alert", hold=2)
+    assert r["outcome"] == "TIMEOUT" and r["exit_price"] == 101
+
+
+def test_deliver_claims_once_and_logs_without_credentials():
+    from drishti.core import db
+
+    async def go():
+        try:
+            async with db.sessionmaker()() as s:
+                ref = f"test:{dt_now()}"
+                assert await notify.deliver(s, "SUMMARY", ref, "x") == "logged"
+                assert await notify.deliver(s, "SUMMARY", ref, "x") == "dup"     # never twice
+                st = (await s.execute(text("select status from notify_event where ref = :r"),
+                                      {"r": ref})).scalar()
+                assert st == "logged"
+        finally:
+            await db.engine().dispose()
+            db.engine.cache_clear()
+
+    def dt_now():
+        import time
+        return time.time_ns()
+    asyncio.run(go())
 
 
 def test_journal_api_and_stats_on_test_db():
