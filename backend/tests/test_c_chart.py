@@ -375,3 +375,17 @@ def test_bars_carry_markers(client):
         assert m["time"] in times and m["kind"] in ("bull", "bear", "caution")
         assert (m["stop"] is not None) == (m["kind"] == "bull")
         assert not re.search(r"\b(buy|sell)\b", " ".join(m["flags"]).lower())
+
+
+def test_pattern_layers_wording(client):
+    """Bullish / bearish groupings come from the API; the chart's pattern and hindsight layers
+    carry no buy / sell verbs (only the scanner alert levels are actionable)."""
+    from drishti.api.chart_markers import BEARISH
+    from drishti.features import candles
+    j = client.get("/api/chart2/bars", params={"key": "K", "tf": "1d"}).json()
+    assert j["bearish_flags"] == list(BEARISH) and not set(BEARISH) & set(candles.BULLISH)
+    kc = API.parents[2] / "web" / "components" / "kchart"
+    for f in kc.glob("*.ts*"):
+        src = f.read_text()
+        assert not re.search(r"\b(BUY|SELL)\b", src), f.name
+    assert "the only actionable layer is the alert levels" in (kc / "KChart.tsx").read_text()

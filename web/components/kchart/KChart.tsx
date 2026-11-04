@@ -22,7 +22,7 @@ export type BarsData = {
   bars: { time: string | number; open: number; high: number; low: number; close: number; volume: number; chg_pct: number | null;
           dir: "bull" | "bear" | "flat"; confirm: string | null; follow: string | null }[];
   lines: Record<string, Pt[]>; panes: Record<string, Pt[]>;
-  candles: { time: string | number; flags: string[] }[]; bullish_flags: string[];
+  candles: { time: string | number; flags: string[] }[]; bullish_flags: string[]; bearish_flags?: string[];
   markers?: { label: string; note: string; items: { time: string | number; kind: "bull" | "bear" | "caution"; flags: string[]; stop: number | null }[] };
   zones: { price: number; bottom: number; top: number; touches: number }[];
   trend: "UP" | "DOWN" | "SIDE";
@@ -38,14 +38,18 @@ type Layers = { zones: boolean; patterns: "bullish" | "all" | "off"; trend: bool
 type Magnet = "normal" | "weak_magnet" | "strong_magnet";
 
 export const ts = (t: string | number) => (typeof t === "number" ? t * 1000 : Date.parse(`${t}T00:00:00+05:30`));
-const STOP_BARS = 10;   // a pattern marker's stop line runs this many bars to the right
-const LS = { ind: "drishti.chart.ind.v1", ctype: "drishti.chart.ctype", scale: "drishti.chart.scale", layers: "drishti.chart.layers", theme: "drishti.theme.v1", magnet: "drishti.chart.magnet" };
+const STOP_BARS = 10;
+const LEGEND = "▲ = detected candlestick pattern (context only, not a signal, no validated edge); the only actionable layer is the alert levels.";   // a pattern marker's stop line runs this many bars to the right
+const LS = { ind: "drishti.chart.ind.v1", ctype: "drishti.chart.ctype", scale: "drishti.chart.scale", layers: "drishti.chart.layers.v2", theme: "drishti.theme.v1", magnet: "drishti.chart.magnet" };
 function ls<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); return v ? (JSON.parse(v) as T) : d; } catch { return d; } }
 function lsSet(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked */ } }
 const qs = (o: Record<string, string | number | boolean>) => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&");
 
 /** Scanner alert levels drawn on the chart (entry blue, stop red, R1/R2 green dashed, marker on bar_time). */
-export type AlertLevels = { entry: number; stop: number; r1: number | null; r2: number | null; barTime: string; tf: "1d" | "15m" };
+/** A zone as the alert saw it (scan_alert.context.zones_used): pivot dates first / last, and the
+ * date the last pivot was confirmed (5 bars later). */
+export type SavedZone = { name: string; bottom: number; top: number; touches?: number; first?: string; last?: string; confirmed?: string };
+export type AlertLevels = { entry: number; stop: number; r1: number | null; r2: number | null; barTime: string; tf: "1d" | "15m"; zones: SavedZone[] };
 
 export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
   instrumentKey: string; tf: Tf; setTf: (t: Tf) => void; onData: (d: BarsData | null) => void; levels?: AlertLevels;
@@ -61,7 +65,11 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
   const [err, setErr] = useState("");
   const [ctype, setCtype] = useState<CType>("candle_solid");
   const [scale, setScale] = useState<Scale>("normal");
-  const [layers, setLayers] = useState<Layers>({ zones: true, patterns: "bullish", trend: true, signals: true });
+  const [layers, setLayers] = useState<Layers>({ zones: true, patterns: "off", trend: true, signals: false });
+  // alert panel (point in time): today's zones are off by default and never share the stock page's setting
+  const [todayZ, setTodayZ] = useState(false);
+  const showZones = levels ? todayZ : layers.zones;
+  const levelsKey = JSON.stringify(levels ?? null);   // pages build `levels` inline: redraw only on a real change
   const [inds, setInds] = useState<Instance[]>(DEFAULT_SET);
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [magnet, setMagnet] = useState<Magnet>("weak_magnet");
@@ -83,7 +91,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
   // preferences (per browser)
   useEffect(() => {
     setCtype(ls(LS.ctype, "candle_solid")); setScale(ls(LS.scale, "normal")); setInds(ls(LS.ind, DEFAULT_SET));
-    setLayers({ zones: true, patterns: "bullish", trend: true, signals: true, ...ls(LS.layers, {}) }); setMagnet(ls(LS.magnet, "weak_magnet"));
+    setLayers({ zones: true, patterns: "off", trend: true, signals: false, ...ls(LS.layers, {}) }); setMagnet(ls(LS.magnet, "weak_magnet"));
     // the theme key is shared with ThemeToggle, which stores the plain string (not JSON)
     let savedTheme: string | null = null;
     try { savedTheme = localStorage.getItem(LS.theme)?.replace(/"/g, "") ?? null; } catch { /* storage blocked */ }
@@ -189,12 +197,16 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
     const ov: OverlayCreate[] = [line(levels.entry, "Entry", "#3a86ff", false), line(levels.stop, "Stop", "#e03131", false)];
     if (levels.r1 !== null) ov.push(line(levels.r1, "R1", "#2f9e44", true));
     if (levels.r2 !== null) ov.push(line(levels.r2, "R2", "#2f9e44", true));
+    // the alert's own R1 / R2 bands, as saved with the alert (not today's zones)
+    levels.zones.forEach((z) => ov.push({ name: "d_band", groupId: "alert", lock: true,
+      extendData: { top: z.top, bottom: z.bottom, label: `${z.name.toUpperCase()} zone (alert's) ${z.bottom.toFixed(2)}–${z.top.toFixed(2)}${z.first ? ` · pivots ${z.first.slice(0, 10)} → ${(z.last ?? "").slice(0, 10)}` : ""}${z.confirmed ? ` · confirmed ${z.confirmed.slice(0, 10)}` : ""}` },
+      points: [{ timestamp: t1, value: z.top }] } as OverlayCreate));
     // the alert bar: 1d bars are keyed by the IST date, intraday bars by their start time
     const at = levels.tf === "1d" ? ts(new Date(levels.barTime).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })) : Date.parse(levels.barTime);
     const bar = bars.current.find((k) => k.timestamp === at);
-    if (bar && (levels.tf === d.tf)) ov.push({ name: "d_mark", groupId: "alert", lock: true, extendData: "alert", points: [{ timestamp: at, value: bar.high }] } as OverlayCreate);
+    if (bar && (levels.tf === d.tf)) ov.push({ name: "d_mark", groupId: "alert", lock: true, extendData: "ALERT", points: [{ timestamp: at, value: bar.high }] } as OverlayCreate);
     c.createOverlay(ov);
-  }, [d, levels]);
+  }, [d, levelsKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Drishti layers
   useEffect(() => {
@@ -203,21 +215,27 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
     c.removeOverlay({ groupId: "drishti" });
     const t0 = bars.current[0].timestamp, t1 = bars.current[bars.current.length - 1].timestamp;
     const ov: OverlayCreate[] = [];
-    if (layers.zones && d.zones.length) ov.push({ name: "d_zones", groupId: "drishti", lock: true,
-      extendData: d.zones.map((z) => ({ top: z.top, bottom: z.bottom, label: `S/R ×${z.touches} · ${z.price.toFixed(2)}` })),
+    if (showZones && d.zones.length) ov.push({ name: "d_zones", groupId: "drishti", lock: true,
+      extendData: d.zones.map((z) => ({ top: z.top, bottom: z.bottom, label: `${levels ? "Today's zone (not the alert's) · " : ""}S/R ×${z.touches} · ${z.price.toFixed(2)}` })),
       points: [{ timestamp: t0, value: d.zones[0].price }] });
     if (layers.patterns !== "off") {
-      const bull = new Set(d.bullish_flags);
-      const low = new Map(d.bars.map((b) => [ts(b.time), b.low]));
+      // one rule for every bar: the same pattern always gets the same small muted glyph
+      // (▲ under the low = bullish pattern, ▼ over the high = bearish, · = neutral); context only
+      const bull = new Set(d.bullish_flags), bear = new Set(d.bearish_flags ?? []);
+      const bar = new Map(d.bars.map((b) => [ts(b.time), b]));
       d.candles.forEach((m) => {
+        const t = ts(m.time), b = bar.get(t);
+        if (!b) return;
         const fl = layers.patterns === "all" ? m.flags : m.flags.filter((f) => bull.has(f));
-        if (fl.length) ov.push({ name: "d_pat", groupId: "drishti", lock: true, extendData: { bull: fl.some((f) => bull.has(f)) }, points: [{ timestamp: ts(m.time), value: low.get(ts(m.time)) }] });
+        const kinds = new Set(fl.map((f) => (bull.has(f) ? "bull" : bear.has(f) ? "bear" : "neutral")));
+        kinds.forEach((kind) => ov.push({ name: "d_pat", groupId: "drishti", lock: true, extendData: { kind },
+          points: [{ timestamp: t, value: kind === "bear" ? b.high : b.low }] }));
       });
     }
     if (layers.signals && d.markers) {
-      // server-side, causal pattern markers (no repaint): bull = pattern label + a stop line at
-      // the signal bar's low; bear = pattern label; 'caution' = a bear pattern in an uptrend,
-      // shown only as a faint note. Not trade signals: the scanner alerts are.
+      // server-side, causal tags (no repaint) on the bar that confirmed a trigger pattern, only when
+      // close >= EMA20 or at a support known then (bear: mirror); bull also shows the pattern bar's
+      // low; a bear tag in an uptrend is a faint 'caution'. Context only: the alerts are actionable.
       const idx = new Map(d.bars.map((b, i) => [ts(b.time), i]));
       d.markers.items.forEach((m) => {
         const t = ts(m.time), i = idx.get(t);
@@ -233,7 +251,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
       });
     }
     if (ov.length) c.createOverlay(ov);
-  }, [d, layers]);
+  }, [d, layers, showZones, levelsKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // indicators: values fetched per instance from the API, drawn by the catalog templates
   const indKey = JSON.stringify(inds);
@@ -483,18 +501,23 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
           <label className="tog">Price scale <select value={scale} onChange={(e) => setScaleP(e.target.value as Scale)}><option value="normal">Regular</option><option value="logarithm">Log</option><option value="percentage">Percent</option></select></label>
           <label className="tog">Theme <select value={theme} onChange={(e) => setThemeP(e.target.value as "light" | "dark")}><option value="light">Light</option><option value="dark">Dark</option></select></label>
           <b>Drishti layers</b>
-          <label className="tog"><input type="checkbox" checked={layers.zones} onChange={(e) => setLayersP({ ...layers, zones: e.target.checked })} />S/R zones</label>
-          <label className="tog">Candle patterns <select value={layers.patterns} onChange={(e) => setLayersP({ ...layers, patterns: e.target.value as Layers["patterns"] })}><option value="bullish">trigger flags</option><option value="all">all 26</option><option value="off">off</option></select></label>
+          {levels
+            ? <label className="tog"><input type="checkbox" checked={todayZ} onChange={(e) => setTodayZ(e.target.checked)} />Today&apos;s zones (not the alert&apos;s)</label>
+            : <label className="tog"><input type="checkbox" checked={layers.zones} onChange={(e) => setLayersP({ ...layers, zones: e.target.checked })} />S/R zones</label>}
+          <label className="tog">Candlestick patterns (context) <select value={layers.patterns} onChange={(e) => setLayersP({ ...layers, patterns: e.target.value as Layers["patterns"] })}><option value="off">off</option><option value="bullish">3 trigger patterns</option><option value="all">all 26</option></select></label>
           <label className="tog"><input type="checkbox" checked={layers.trend} onChange={(e) => setLayersP({ ...layers, trend: e.target.checked })} />Trend badges</label>
-          <label className="tog"><input type="checkbox" checked={layers.signals} onChange={(e) => setLayersP({ ...layers, signals: e.target.checked })} />Pattern markers (▲ bull + stop · ▼ bear · faint caution)</label>
-          <span className="muted small">Pattern - not a prediction; not used by drishti-swing-v1. Actionable items are the Scanner alerts.</span>
+          <label className="tog"><input type="checkbox" checked={layers.signals} onChange={(e) => setLayersP({ ...layers, signals: e.target.checked })} />Confirmed-pattern tags (next bar confirmed, close ≥ EMA20 or at support) + pattern-bar low</label>
+          <span className="muted small">{LEGEND} Pattern - NOT a prediction; not used by drishti-swing-v1.</span>
           <button onClick={() => setMenu("")}>Close</button>
         </div>
       )}
       {layers.trend && d && <TrendStrip d={d} live={live} />}
-      {layers.signals && d?.markers && d.markers.items.length > 0 && (
-        <div className="kc-mknote" role="note">▲▼ {d.markers.label}. Actionable: <a href="/scanner">Scanner alerts</a> (entry / stop / R1 / R2), not these markers.</div>
-      )}
+      <div className="kc-mknote kc-pit" role="note">
+        {levels && <span>Point in time: lines and green bands are the alert&apos;s saved levels{levels.zones.length ? "" : " (this alert has no saved zones: R1 / R2 lines only)"}.</span>}
+        {levels && <label className="tog"><input type="checkbox" checked={todayZ} onChange={(e) => setTodayZ(e.target.checked)} />Today&apos;s zones (not the alert&apos;s)</label>}
+        <label className="tog"><input type="checkbox" checked={layers.patterns !== "off"} onChange={(e) => setLayersP({ ...layers, patterns: e.target.checked ? "bullish" : "off" })} />Candlestick patterns (context)</label>
+        {(layers.patterns !== "off" || layers.signals) && <span className="kc-legend-line">{LEGEND} Pattern - NOT a prediction; not used by drishti-swing-v1. {levels ? null : <a href="/scanner">Scanner alerts</a>}</span>}
+      </div>
       <div className="kc-body">
         <div className="kc-tools" role="toolbar" aria-label="Drawing tools">
           {TOOLS.map((t) => <button key={t.name} title={t.label} className={pending?.name === t.name ? "sel" : ""} aria-pressed={pending?.name === t.name}
@@ -516,7 +539,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
               O <b>{fmt(lb.open)}</b> H <b>{fmt(lb.high)}</b> L <b>{fmt(lb.low)}</b> C <b>{fmt(lb.close)}</b>{" "}
               <span style={{ color: (chg ?? 0) >= 0 ? "var(--up)" : "var(--down)" }}>{chg === null || !prev ? "" : `${chg >= 0 ? "+" : ""}${fmt(chg)} (${fmt((100 * chg) / prev.close)}%)`}</span>{" "}
               <span className="muted">Vol {(lb.volume ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
-              {(() => { const f = d.candles.find((m) => ts(m.time) === lb.timestamp)?.flags; return f?.length ? <span className="kc-legend-pat"> ▲ {f.join(", ")}</span> : null; })()}
+              {(() => { const f = d.candles.find((m) => ts(m.time) === lb.timestamp)?.flags; return f?.length ? <span className="kc-legend-pat"> pattern: {f.join(", ")}</span> : null; })()}
             </div>
           )}
           {cardOpen && hover && lb && d && <BarCard d={d} k={lb} prev={prev} when={when} x={hover.x} width={box.current?.clientWidth ?? 0} live={live}
@@ -546,7 +569,6 @@ function BarCard({ d, k, prev, when, x, width, live, inds, i }: {
   const sb = d.bars.find((b) => ts(b.time) === k.timestamp);   // undefined for a live bar newer than the API data
   const dir = k.close > k.open ? "bull" : k.close < k.open ? "bear" : "flat";
   const DIR = { bull: ["Bullish (green)", "var(--up)"], bear: ["Bearish (red)", "var(--down)"], flat: ["Flat (open = close)", "var(--muted)"] } as const;
-  const tone = (v: string | null | undefined) => (v === "confirmed" || v === "follow-through" ? (dir === "bull" ? "var(--up)" : "var(--down)") : "var(--muted)");
   const W = 250;
   const left = x + 18 + W > width ? Math.max(4, x - W - 18) : x + 18;
   const rows: [string, string][] = [];
@@ -573,19 +595,15 @@ function BarCard({ d, k, prev, when, x, width, live, inds, i }: {
         <tr><td>Range</td><td>{fmt(k.high - k.low)}</td></tr>
         <tr><td>Volume</td><td>{(k.volume ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</td></tr>
         {rows.map(([a, v]) => <tr key={a}><td>{a}</td><td>{v}</td></tr>)}
-        {pats.length > 0 && <tr><td>Patterns</td><td>{pats.join(", ")}</td></tr>}
+        {pats.length > 0 && <tr><td>Patterns</td><td>{pats.join(", ").replace(/_/g, " ")}<div className="muted small">context only · NOT a prediction</div></td></tr>}
         {dir !== "flat" && <>
-          <tr><td title={dir === "bull" ? "next candle closed above this high" : "next candle closed below this low"}>Next candle</td>
-            <td style={{ color: tone(sb?.confirm), fontWeight: sb?.confirm === "confirmed" ? 700 : 400 }}>
-              {sb?.confirm === "confirmed" ? `confirmed (${dir === "bull" ? "BUY" : "SELL"})` : (sb?.confirm ?? "pending")}
-            </td></tr>
-          {(sb?.confirm === "confirmed") && <tr><td title="the candle after that closed further in the same direction">Candle after</td>
-            <td style={{ color: tone(sb?.follow), fontWeight: sb?.follow === "follow-through" ? 700 : 400 }}>
-              {sb?.follow === "follow-through" ? `follow-through (${dir === "bull" ? "BUY" : "SELL"})` : (sb?.follow ?? "pending")}
-            </td></tr>}
+          <tr><td title={dir === "bull" ? "did the next bar close above this bar's high?" : "did the next bar close below this bar's low?"}>Next bar (hindsight)</td>
+            <td>{sb?.confirm === "confirmed" ? `closed ${dir === "bull" ? "above this high" : "below this low"} (confirmed next bar)` : sb?.confirm === "not confirmed" ? "not confirmed" : "pending"}</td></tr>
+          {(sb?.confirm === "confirmed") && <tr><td title="did the bar after that close further the same way?">Bar after (hindsight)</td>
+            <td>{sb?.follow === "follow-through" ? `closed ${dir === "bull" ? "higher" : "lower"} again` : sb?.follow === "no follow-through" ? "did not continue" : "pending"}</td></tr>}
         </>}
       </tbody></table>
-      <div className="muted small" style={{ marginTop: 4 }}>Next candle / candle after: what later candles did (hindsight). NOT a prediction; not used by drishti-swing-v1.</div>
+      <div className="muted small" style={{ marginTop: 4 }}>Next bar / bar after: what later bars did (hindsight, not a signal). Patterns: NOT a prediction; not used by drishti-swing-v1.</div>
     </div>
   );
 }
