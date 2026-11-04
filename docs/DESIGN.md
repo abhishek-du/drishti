@@ -292,6 +292,14 @@ web/ (Next.js + lightweight-charts)   ops/ (runbooks + systemd user units)   doc
     - "expired, entry not triggered (no trade)".
 
     Each gives the time or date, the price and the net R. When the journal says watching/took, the message adds "Your marked trade" (with the user's own entry and net R when graded). "Prediction" wording is never used.
+- **Routing (user 2026-11-04 evening; the first version would have sent ~200 messages a day):**
+  - **Individual:** swing (1d) alerts and their outcomes.
+  - **Digest:** the EOD Scout watchlist (one message), and the Live Radar names (one message per new name; there are only a few a day).
+  - **15m alerts:** one `DIGEST_15M` per 15m bar, listing the bar's new alerts (symbol, setup, entry/stop/target, net R:R, tag). Their outcomes go into one `OUTCOME_15M` end-of-day digest, sent in the 15:31 run (backstop: the 09:45 `scan_grade`). The digest gives counts, total/average net R, by setup, and one line per alert.
+  - **Exceptions (individual 15m alert + outcome):** the top `WATCHLIST_TOP_INDIVIDUAL` (10) names of the watchlist the scan used that day, the day's Live Radar names, and alerts the user marked watching/took.
+  - **Why not the whole watchlist:** the 15m scan only covers watchlist + radar names, so every 15m alert would be an exception.
+  - Events folded into a digest are stored as `digested` (migration 0013) and are never sent singly later.
+  - **Estimate on 11-04's data:** 111 15m alerts → 22 bar digests + 16 individual. With ~10 swing alerts, about 75 messages a day, versus ~200 before.
 - **Outcome tracking:**
   - **15m alerts:** tracked live inside `scan_intraday` on the recorder's closed 15m bars, with the same grade function as the nightly grader. They are **flat by the end of the session**: the horizon is the bars left to the 15:15–15:30 bar (`grade.slots_left`).
     - A live final grade (`journal_outcome.source = 'live'`) is never replaced by the nightly one.

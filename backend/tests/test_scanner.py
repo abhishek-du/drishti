@@ -316,3 +316,56 @@ def test_15m_alerts_are_not_scored_by_the_daily_engine():
     from drishti.scanner import odds_job
     assert scan_api.ODDS_15M == {"status": "odds pending: 15m engine"}
     assert odds_job.HORIZON == grade.HOLD["1d"] == 5
+
+
+def test_15m_alerts_and_outcomes_go_out_as_digests_once():
+    import datetime as dt
+    import random
+    from drishti.core import db
+
+    async def go():
+        try:
+            async with db.sessionmaker()() as s:
+                day = dt.date(2031, 1, 1) + dt.timedelta(days=random.randint(0, 3000))
+                bt = dt.datetime.combine(day, dt.time(4, 45), dt.timezone.utc)
+                rid = (await s.execute(text("""insert into run(run_id, kind, code_sha, params)
+                    values (gen_random_uuid(), 'TEST_NOTIFY', 'test', '{}') returning run_id"""))
+                ).scalar()
+                ids = []
+                for i, (key, sym) in enumerate((("NSE_EQ|TN1", "AAA"), ("NSE_EQ|TN2", "BBB"),
+                                               ("NSE_EQ|TN3", "CCC"))):
+                    ids.append((await s.execute(text("""insert into scan_alert(run_id,
+                        session_date, tf, bar_time, instrument_key, symbol, detector, version,
+                        entry_ref, stop, r1, r2, rr_r1, qty, capital, risk_pct, cost_r, atr,
+                        context) values (:r, :d, '15m', :bt, :k, :sym, 'EMA20_PULLBACK',
+                        'scan-v1', 100, 95, 100.3, null, 0.06, 2000, 1000000, 1, 0.1, 2, '{}')
+                        returning id"""), {"r": rid, "d": day, "bt": bt, "k": key,
+                                          "sym": sym})).scalar())
+                await s.commit()
+                o1 = await notify.deliver_alerts(s, "15m")
+                assert o1 == {"digest_logged": 1}                     # one digest, not three
+                assert await notify.deliver_alerts(s, "15m") == {}   # never again
+                txt = (await s.execute(text("""select text from notify_event
+                    where kind = 'DIGEST_15M' and ref like :r"""),
+                    {"r": f"digest15:{day}%"})).scalar()
+                assert "AAA EMA20_PULLBACK" in txt and "(2R)" in txt and "broken R1" in txt
+                assert notify.LABEL in txt and "D5" in txt
+                for i, k in zip(ids, ("R1", "STOP", "TIMEOUT")):
+                    await s.execute(text("""insert into journal_outcome(alert_id, run_id, basis,
+                        outcome, entry_used, exit_price, target_used, r_net, bars_used, source)
+                        values (:a, :r, 'alert', :o, 100, 101, 110, :rn, 3, 'live')"""),
+                        {"a": i, "r": rid, "o": k, "rn": {"R1": 1.8, "STOP": -1.1,
+                                                         "TIMEOUT": -0.3}[k]})
+                await s.commit()
+                assert await notify.deliver_outcomes(s) == {}         # 15m: no singles
+                assert await notify.deliver_outcomes_15m(s, day) == "logged"
+                assert await notify.deliver_outcomes_15m(s, day) == "nothing to send"
+                t = (await s.execute(text("""select text from notify_event
+                    where kind = 'OUTCOME_15M' and ref = :r"""), {"r": f"outcome15:{day}"})
+                    ).scalar()
+                assert "Target reached 1 · stop hit 1 · expired 1" in t and "+0.40 R" in t
+        finally:
+            await db.engine().dispose()
+            db.engine.cache_clear()
+
+    asyncio.run(go())

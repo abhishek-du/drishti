@@ -422,13 +422,20 @@ async def main(cmd: str, args: list[str]) -> dict:
                 out.pop("alert_ids", None)
                 out["telegram"] = {"radar": await notify.deliver_radar(s, t.date()),
                                    "alerts": await notify.deliver_alerts(s, "15m"),
-                                   "outcomes": await notify.deliver_outcomes(s),
-                                   "summary": await notify.flush_batched(s, rid)}
+                                   "outcomes": await notify.deliver_outcomes(s)}
+                if t.time() >= _dt.time(15, 30):        # after the last bar: the EOD digest
+                    out["telegram"]["outcomes_15m"] = await notify.deliver_outcomes_15m(
+                        s, t.date())
+                out["telegram"]["summary"] = await notify.flush_batched(s, rid)
             elif cmd == "scan_grade":
                 out = await scan_grade(s, ps, rid, "--all" in args)
                 out["telegram"] = {"outcomes": await notify.deliver_outcomes(s),
-                                   "alerts": await notify.deliver_alerts(s),   # any left over
-                                   "summary": await notify.flush_batched(s, rid)}
+                                   "alerts": await notify.deliver_alerts(s)}   # any left over
+                prev = (await s.execute(text("""select max(session_date) from scan_alert
+                    where tf = '15m' and session_date < :t"""), {"t": today()})).scalar()
+                if prev:                                 # backstop for a missed 15:31 run
+                    out["telegram"]["outcomes_15m"] = await notify.deliver_outcomes_15m(s, prev)
+                out["telegram"]["summary"] = await notify.flush_batched(s, rid)
             else:
                 raise SystemExit(__doc__)
         except BaseException as e:

@@ -11,8 +11,11 @@ are 'batched' into one summary line. Only events of sessions from NOTIFY_SINCE o
 flood of older alerts when delivery was switched on).
 
 Kinds: SCOUT_DIGEST (one per EOD watchlist), RADAR_NEW (one per new Live Radar name), ALERT (one
-per scanner alert, with the actionable target after the broken-R1 rule and the odds verdict for
-1d alerts), OUTCOME (one per alert: target reached / stop hit / expired), SUMMARY (overflow).
+per 1d alert / per exception 15m alert, with the actionable target after the broken-R1 rule and
+the odds line for 1d), DIGEST_15M (one per 15m bar: the bar's other 15m alerts), OUTCOME (one
+per 1d / exception 15m alert: target reached / stop hit / expired), OUTCOME_15M (one end-of-day
+digest of the other 15m outcomes), SUMMARY (overflow). Events folded into a digest are stored
+as 'digested' and never sent individually.
 """
 
 from __future__ import annotations
@@ -33,6 +36,12 @@ log = logging.getLogger("drishti.scanner.notify")
 LABEL = "Decision support — not a validated edge, not a prediction. Paper only. Your call."
 NOTIFY_SINCE = _dt.date(2026, 11, 5)
 MAX_PER_RUN = 25
+# routing (user 2026-11-04, ~200 messages/day was unusable): 1d alerts + outcomes individual;
+# 15m alerts as one digest per 15m bar and their outcomes as one end-of-day digest, except for
+# the top WATCHLIST_TOP_INDIVIDUAL watchlist names, today's Live Radar names and anything the
+# user marked watching/took (individual). The whole watchlist cannot be the exception: the 15m
+# scan only covers watchlist + radar names, so every 15m alert would qualify.
+WATCHLIST_TOP_INDIVIDUAL = 10
 GAP_S = 1.1
 CAVEAT_15M = ("15m levels use unadjusted 15m bars (DEVIATIONS D5): unreliable for a stock "
               "with a split/bonus in the last ~25 days, until the 11-20 switch work adjusts them.")
@@ -182,9 +191,45 @@ def outcome_text(a: dict, o: dict, took: dict | None, marked: str | None) -> str
 
 # ---- delivery passes ----------------------------------------------------------------------
 
+async def individual_15m(s, day: _dt.date) -> tuple[set[str], set[int]]:
+    """(keys, alert ids) whose 15m alerts/outcomes of `day` go out individually: the top
+    WATCHLIST_TOP_INDIVIDUAL of the watchlist the intraday scan used that day (the latest run
+    before `day`), the day's Live Radar names, and alerts the user marked watching/took."""
+    top = set((await s.execute(text("""
+        with r as (select run_id from watchlist_run where session_date < :d
+                   order by session_date desc, created_at desc limit 1)
+        select instrument_key from watchlist_event where run_id = (select run_id from r)
+          and event <> 'DROPPED' order by rank nulls last limit :n"""),
+        {"d": day, "n": WATCHLIST_TOP_INDIVIDUAL})).scalars())
+    radar = set((await s.execute(text("""select instrument_key from radar_event
+        where session_date = :d"""), {"d": day})).scalars())
+    marked = set((await s.execute(text("""select a.id from scan_alert a join journal_entry j
+        on j.alert_id = a.id where a.session_date = :d and a.tf = '15m'
+        and j.status in ('watching', 'took')"""), {"d": day})).scalars())
+    return top | radar, marked
+
+
+def digest_line(a: dict) -> str:
+    ct = choose_target(float(a["entry_ref"]), float(a["stop"]), a["r1"], a["r2"], a["qty"] or 0)
+    tag = f" [{ct['tags'][0]}]" if ct["tags"] else ""
+    return (f"{a['symbol'] or a['instrument_key']} {a['detector']}: E {_f(a['entry_ref'])} "
+            f"S {_f(a['stop'])} T {_f(ct['target'])} ({ct['target_basis']}) "
+            f"net R:R {_f(ct['net_rr_target'])}{tag}")
+
+
+async def _mark(s, kind: str, ids: list[int], ref: str) -> None:
+    for i in ids:
+        await s.execute(text("""insert into notify_event(kind, ref, status, text)
+            values (:k, :r, 'digested', :t) on conflict (kind, ref) do nothing"""),
+            {"k": kind, "r": f"{'alert' if kind == 'ALERT' else 'outcome'}:{i}",
+             "t": f"in {ref}"})
+    await s.commit()
+
+
 async def deliver_alerts(s, tf: str | None = None, odds_wait_min: int = 40) -> dict:
-    """Every alert from NOTIFY_SINCE without an ALERT message. A 1d alert waits up to
-    `odds_wait_min` for its odds (scan_eod scores them right after the scan)."""
+    """Every alert from NOTIFY_SINCE without an ALERT event. 1d: one message each (a 1d alert
+    waits up to `odds_wait_min` for its odds; scan_eod scores them right after the scan). 15m:
+    exceptions one each, the rest one DIGEST_15M per bar."""
     rows = [dict(r) for r in (await s.execute(text("""
         select a.*, ol.mc_target_first, ol.mc_avg_r_net, ol.breakeven, ol.thin_sample,
                ol.verdict
@@ -192,10 +237,19 @@ async def deliver_alerts(s, tf: str | None = None, odds_wait_min: int = 40) -> d
         where a.session_date >= :since and (cast(:tf as text) is null or a.tf = :tf)
           and not exists (select 1 from notify_event n where n.kind = 'ALERT'
                           and n.ref = 'alert:' || a.id)
-        order by a.id"""), {"since": NOTIFY_SINCE, "tf": tf})).mappings()]
+        order by a.bar_time, a.id"""), {"since": NOTIFY_SINCE, "tf": tf})).mappings()]
     out: dict = {}
     now_ = _dt.datetime.now(_dt.timezone.utc)
+    groups: dict = {}
+    exc: dict = {}
     for a in rows:
+        if a["tf"] == "15m":
+            if a["session_date"] not in exc:
+                exc[a["session_date"]] = await individual_15m(s, a["session_date"])
+            keys, marked = exc[a["session_date"]]
+            if a["instrument_key"] not in keys and a["id"] not in marked:
+                groups.setdefault(a["bar_time"], []).append(a)
+                continue
         has_odds = a.get("mc_target_first") is not None
         if a["tf"] == "1d" and not has_odds and now_ - a["created_at"] < \
                 _dt.timedelta(minutes=odds_wait_min):
@@ -203,35 +257,110 @@ async def deliver_alerts(s, tf: str | None = None, odds_wait_min: int = 40) -> d
             continue
         st = await deliver(s, "ALERT", f"alert:{a['id']}", alert_text(a, a if has_odds else None))
         out[st] = out.get(st, 0) + 1
+    for bt, al in groups.items():
+        ref = f"digest15:{bt.astimezone(IST):%Y-%m-%dT%H:%M}"
+        lines = [f"15m ALERTS DIGEST · {bt.astimezone(IST):%Y-%m-%d} · "
+                 f"{_ist(bt)}–{_ist(bt + _dt.timedelta(minutes=15))} IST bar · {len(al)} new"]
+        lines += [digest_line(a) for a in al[:40]]
+        if len(al) > 40:
+            lines.append(f"... and {len(al) - 40} more (Scanner page)")
+        lines += ["Targets after the broken-R1 rule; odds pending (15m engine).", CAVEAT_15M,
+                  "", LABEL]
+        st = await deliver(s, "DIGEST_15M", ref, "\n".join(lines))
+        if st in ("sent", "logged", "dup"):
+            await _mark(s, "ALERT", [a["id"] for a in al], ref)
+        out[f"digest_{st}"] = out.get(f"digest_{st}", 0) + 1
     return out
+
+
+def _outcome_word(r: dict) -> str:
+    k = r["outcome"]
+    return {"R1": f"target reached {_f(r['r_net'])} R", "STOP": f"stop hit {_f(r['r_net'])} R",
+            "TIMEOUT": f"expired {_f(r['r_net'])} R"}.get(k, "entry not triggered")
+
+
+_OUTCOME_SQL = """
+    with l as (select distinct on (alert_id, basis) * from journal_outcome
+               order by alert_id, basis, graded_at desc, id desc)
+    select a.*, j.status as jstatus, j.actual_entry,
+           o.outcome, o.entry_used, o.exit_price, o.exit_bar, o.target_used, o.r_net,
+           t.outcome as t_outcome, t.entry_used as t_entry, t.r_net as t_r_net
+    from scan_alert a join l o on o.alert_id = a.id and o.basis = 'alert'
+    left join l t on t.alert_id = a.id and t.basis = 'took'
+    left join journal_entry j on j.alert_id = a.id
+    where a.session_date >= :since and o.outcome in ('R1', 'STOP', 'TIMEOUT', 'NO_FILL')
+      and not exists (select 1 from notify_event n where n.kind = 'OUTCOME'
+                      and n.ref = 'outcome:' || a.id)"""
 
 
 async def deliver_outcomes(s) -> dict:
-    """One OUTCOME message per alert (from NOTIFY_SINCE) once its latest 'alert' grade is final
-    (R1 = target, STOP, TIMEOUT = expired, NO_FILL = entry not triggered)."""
-    rows = [dict(r) for r in (await s.execute(text("""
-        with l as (select distinct on (alert_id, basis) * from journal_outcome
-                   order by alert_id, basis, graded_at desc, id desc)
-        select a.*, j.status as jstatus, j.actual_entry,
-               o.outcome, o.entry_used, o.exit_price, o.exit_bar, o.target_used, o.r_net,
-               t.outcome as t_outcome, t.entry_used as t_entry, t.r_net as t_r_net
-        from scan_alert a join l o on o.alert_id = a.id and o.basis = 'alert'
-        left join l t on t.alert_id = a.id and t.basis = 'took'
-        left join journal_entry j on j.alert_id = a.id
-        where a.session_date >= :since and o.outcome in ('R1', 'STOP', 'TIMEOUT', 'NO_FILL')
-          and not exists (select 1 from notify_event n where n.kind = 'OUTCOME'
-                          and n.ref = 'outcome:' || a.id)
+    """One OUTCOME message per final 1d alert and per final exception 15m alert (target reached
+    / stop hit / expired / entry not triggered). Other 15m outcomes wait for the end-of-day
+    digest (deliver_outcomes_15m)."""
+    rows = [dict(r) for r in (await s.execute(text(_OUTCOME_SQL + """
         order by o.exit_bar nulls first, a.id"""), {"since": NOTIFY_SINCE})).mappings()]
     out: dict = {}
+    exc: dict = {}
     for r in rows:
-        marked = None
+        if r["tf"] == "15m":
+            if r["session_date"] not in exc:
+                exc[r["session_date"]] = await individual_15m(s, r["session_date"])
+            keys, marked = exc[r["session_date"]]
+            if r["instrument_key"] not in keys and r["id"] not in marked:
+                continue
+        mk = None
         if r["jstatus"] in ("watching", "took"):
-            marked = r["jstatus"] + (f" at {_f(r['actual_entry'])}" if r["actual_entry"] else "")
+            mk = r["jstatus"] + (f" at {_f(r['actual_entry'])}" if r["actual_entry"] else "")
         took = {"entry_used": r["t_entry"], "outcome": r["t_outcome"], "r_net": r["t_r_net"]} \
             if r["t_outcome"] else None
-        st = await deliver(s, "OUTCOME", f"outcome:{r['id']}", outcome_text(r, r, took, marked))
+        st = await deliver(s, "OUTCOME", f"outcome:{r['id']}", outcome_text(r, r, took, mk))
         out[st] = out.get(st, 0) + 1
     return out
+
+
+async def deliver_outcomes_15m(s, day: _dt.date) -> str:
+    """The end-of-day digest of `day`'s 15m outcomes that were not sent individually: counts,
+    net R, by setup, and one compact line per alert. Call after the session's last bar."""
+    if day < NOTIFY_SINCE:
+        return "before NOTIFY_SINCE"
+    keys, marked = await individual_15m(s, day)
+    rows = [dict(r) for r in (await s.execute(text(_OUTCOME_SQL + """
+        and a.tf = '15m' and a.session_date = :d order by a.detector, a.id"""),
+        {"since": NOTIFY_SINCE, "d": day})).mappings()]
+    rows = [r for r in rows if r["instrument_key"] not in keys and r["id"] not in marked]
+    open_n = (await s.execute(text("""
+        with l as (select distinct on (alert_id) alert_id, outcome from journal_outcome
+                   where basis = 'alert' order by alert_id, graded_at desc, id desc)
+        select count(*) from scan_alert a left join l on l.alert_id = a.id
+        where a.tf = '15m' and a.session_date = :d
+          and (l.outcome is null or l.outcome = 'OPEN')"""), {"d": day})).scalar()
+    if not rows:
+        return "nothing to send"
+    ref = f"outcome15:{day}"
+    cnt = {k: sum(1 for r in rows if r["outcome"] == k) for k in ("R1", "STOP", "TIMEOUT",
+                                                                    "NO_FILL")}
+    filled = [float(r["r_net"]) for r in rows if r["outcome"] != "NO_FILL"
+              and r["r_net"] is not None]
+    lines = [f"15m OUTCOMES · {day} (end of day; flat at the close) · {len(rows)} alerts",
+             f"Target reached {cnt['R1']} · stop hit {cnt['STOP']} · expired {cnt['TIMEOUT']}"
+             f" · not triggered {cnt['NO_FILL']}" + (f" · unresolved {open_n}" if open_n else ""),
+             f"Filled {len(filled)}: total {sum(filled):+.2f} R, average "
+             f"{(sum(filled) / len(filled)) if filled else 0:+.2f} R net"]
+    for det in sorted({r["detector"] for r in rows}):
+        d = [float(r["r_net"]) for r in rows if r["detector"] == det
+             and r["outcome"] != "NO_FILL" and r["r_net"] is not None]
+        lines.append(f"  {det}: {len(d)} filled, {sum(d):+.2f} R")
+    lines.append("")
+    lines += [f"{r['symbol'] or r['instrument_key']} {r['detector']}: {_outcome_word(r)}"
+              for r in rows[:40]]
+    if len(rows) > 40:
+        lines.append(f"... and {len(rows) - 40} more (Journal page)")
+    lines += ["", "A day of 15m outcomes is noise, not evidence of an edge.", CAVEAT_15M,
+              "", LABEL]
+    st = await deliver(s, "OUTCOME_15M", ref, "\n".join(lines))
+    if st in ("sent", "logged", "dup"):
+        await _mark(s, "OUTCOME", [r["id"] for r in rows], ref)
+    return st
 
 
 async def deliver_scout(s, day: _dt.date, top_n: int = 10) -> str:

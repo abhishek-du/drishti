@@ -85,7 +85,9 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **Telegram for the scanner:** optional; set `DRISHTI_TELEGRAM_BOT_TOKEN` and `DRISHTI_TELEGRAM_CHAT_ID` in `backend/.env` (otherwise the alert list is only logged).
 
 **Telegram (2026-11-04, DEVIATIONS D6):**
-- Drishti now sends to the bot and chat Prajna used: the Scout digest, Live Radar names, every alert and every outcome, from the 11-05 session on. A test message was sent and delivered on 11-04.
+- Drishti sends to the bot and chat Prajna used, from the 11-05 session on. A test message was sent and delivered on 11-04.
+- Routing: swing alerts and their outcomes are individual; 15m alerts go in one digest per bar and their outcomes in one end-of-day digest. Exceptions: the watchlist top 10, Live Radar names, and anything marked in the journal.
+- **Only source on that chat:** V1 (auto-trade-pro) holds the same token but has no running process, cron, unit or container (its last logs are from 2026-09-21); Prajna is disabled.
 - **Prajna's own Telegram is off:** its `.env` TELEGRAM lines are commented out. To undo, remove the prefix.
 
 **Known caveat (DEVIATIONS D5, 2026-11-04):**
