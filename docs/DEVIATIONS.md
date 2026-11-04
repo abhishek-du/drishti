@@ -71,3 +71,22 @@ The user accepted in writing that **there is no full backup of the `prajna` data
 - The grades (`journal_outcome`) and the alerts (`scan_alert`) stay append-only; a changed actual entry gets a new `took` grade, and the latest row wins.
 - Backups before the migration: `globals_20261103T1205_pre_drishti_0008.sql` and `drishti_20261103T1205_pre_0008.dump` in `/windows/prajna_archive` (sha256 verified).
 - PAPER ONLY: nothing in the scanner or the journal places, changes or cancels an order.
+
+## D5 (2026-11-04): intraday scanner alerts use unadjusted 15m bars (known caveat, user-acknowledged)
+
+**Rule affected:** prices must be split/bonus-adjusted point in time (spec; `bars.official` applies CA factors).
+
+**What is true now:**
+- `scan_intraday` builds its 15m bars (last ~25 days) from Prajna's stored `ohlcv_bar` 15m rows plus the recorder's 1m bars.
+- **Neither is CA-adjusted.** For a stock with a split or bonus ex-date inside that window, the bars before the ex-date are on the old price scale.
+- So that stock's indicators (EMA20, SMA50/200, ATR, the 250-bar high) and its support/resistance zones, and with them R1/R2, the stop and the RR, **can be wrong**.
+- This is a level error, not lookahead: every bar used is still at or before the alert's bar.
+- EOD (1d) alerts are not affected; they use the adjusted official bars.
+
+**User instruction (2026-11-04):** do not rely on intraday alerts for split- or bonus-affected stocks until this is fixed.
+
+**Fix:**
+- The 15m bars must use adjusted data: CA factors applied in `scanner.run.bars15`, as `bars.official` does for 1d.
+- **The 11-20 switch alone does not fix it.** After the switch the 15m bars come from Drishti's nightly intraday Parquet plus the recorder, which are also unadjusted.
+- The fix belongs in the re-point work (P1c item 4): the intraday read path applies Drishti's own CA factors.
+- Until then an alert could carry a `ca_in_window` flag; this is not built yet.
