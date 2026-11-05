@@ -173,7 +173,8 @@ def outcome_text(a: dict, o: dict, took: dict | None, marked: str | None) -> str
         what = f"stop {st} hit {when}, exit {_f(o['exit_price'])} (net R {_f(o['r_net'])})"
     elif k == "TIMEOUT":
         what = (f"expired, neither hit, closed {_f(o['exit_price'])} {when} "
-                f"(net R {_f(o['r_net'])})")
+                f"(net R {_f(o['r_net'])})"
+                + (" — flat by 15:20" if a["tf"] == "15m" else ""))
     else:
         what = (f"expired, entry {_f(a['entry_ref'])} not triggered "
                 f"{'in the next 15m bar' if a['tf'] == '15m' else 'on the next session'}"
@@ -341,7 +342,8 @@ async def deliver_outcomes_15m(s, day: _dt.date) -> str:
                                                                     "NO_FILL")}
     filled = [float(r["r_net"]) for r in rows if r["outcome"] != "NO_FILL"
               and r["r_net"] is not None]
-    lines = [f"15m OUTCOMES · {day} (end of day; flat at the close) · {len(rows)} alerts",
+    lines = [f"15m OUTCOMES · {day} (MIS rule: flat by 15:20, exit at the 15:00–15:15 bar "
+             f"close) · {len(rows)} alerts",
              f"Target reached {cnt['R1']} · stop hit {cnt['STOP']} · expired {cnt['TIMEOUT']}"
              f" · not triggered {cnt['NO_FILL']}" + (f" · unresolved {open_n}" if open_n else ""),
              f"Filled {len(filled)}: total {sum(filled):+.2f} R, average "

@@ -143,7 +143,9 @@ def test_notify_texts_use_the_actionable_target_and_honest_wording():
 def test_15m_horizon_is_the_rest_of_the_session():
     import datetime as dt
     from drishti.core.clock import IST
-    assert grade.slots_left(dt.datetime(2026, 11, 5, 10, 0, tzinfo=IST)) == 21
+    assert grade.slots_left(dt.datetime(2026, 11, 5, 10, 0, tzinfo=IST)) == 20   # 10:15..15:00
+    assert grade.slots_left(dt.datetime(2026, 11, 5, 14, 45, tzinfo=IST)) == 1   # 15:00 bar
+    assert grade.slots_left(dt.datetime(2026, 11, 5, 15, 0, tzinfo=IST)) == 0    # flat by 15:20
     assert grade.slots_left(dt.datetime(2026, 11, 5, 15, 15, tzinfo=IST)) == 0
     a = {"id": 1, "tf": "15m", "entry_ref": 100.0, "stop": 95.0, "r1": 120.0, "r2": None,
          "qty": 2000}
@@ -357,7 +359,11 @@ def test_15m_alerts_and_outcomes_go_out_as_digests_once():
                         {"a": i, "r": rid, "o": k, "rn": {"R1": 1.8, "STOP": -1.1,
                                                          "TIMEOUT": -0.3}[k]})
                 await s.commit()
-                assert await notify.deliver_outcomes(s) == {}         # 15m: no singles
+                await notify.deliver_outcomes(s)                      # 15m: no singles
+                singles = (await s.execute(text("""select count(*) from notify_event
+                    where kind = 'OUTCOME' and ref = any(:r)"""),
+                    {"r": [f"outcome:{i}" for i in ids]})).scalar()
+                assert singles == 0
                 assert await notify.deliver_outcomes_15m(s, day) == "logged"
                 assert await notify.deliver_outcomes_15m(s, day) == "nothing to send"
                 t = (await s.execute(text("""select text from notify_event

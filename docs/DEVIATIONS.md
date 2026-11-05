@@ -112,3 +112,16 @@ The user accepted in writing that **there is no full backup of the `prajna` data
    - It is the same bot and chat Prajna used.
 
 4. **Tests can never send:** `tests/conftest.py` forces both variables empty.
+
+## D7 (2026-11-05): paper portfolio, mutable snapshot and positions
+
+**Rule affected:** Drishti tables are append-only.
+
+**What changed (user decision 2026-11-05, `PREREG_PAPER_PORTFOLIO.md`):**
+- `pf_portfolio` (the live snapshot: cash, holdings value, equity) and `pf_position` (open positions: qty, average price, last price, unrealised P&L, stop, target) are updated in place. They are the only mutable state of the paper portfolio.
+
+**Safeguards:**
+- Every position change is also written to **`pf_position_event`** (append-only: open / add / reduce / close / mark, with before/after qty and price and the fill or mark that caused it). The positions can therefore be rebuilt from the log.
+- `pf_order`, `pf_fill`, `pf_trade`, `pf_equity` and `pf_decision` are append-only (trigger `drishti_append_only`).
+- A paper order is decided and filled (or rejected) in one step from known bars, so each `pf_order` row is written once, with its final status. It is never updated.
+- **PAPER ONLY:** the paper trader writes only `pf_*` tables; no code path places a real order.

@@ -4,7 +4,7 @@ Barriers (the frozen exit rules of drishti.strategies.orders.exit_path: stop fir
 touches both, gap-through at the open):
   target = detect.choose_target: R1 if its net R:R >= 1, else R2, else entry + 2R (user
   2026-11-04: an R1 just above the entry loses money even when hit), stop = the alert's stop,
-  time-out = HOLD bars (1d: 5 sessions; 15m: 25 bars, about one session).
+  time-out = HOLD bars (1d: 5 sessions); 15m: flat by 15:20 (the 15:00-15:15 bar's close).
 Bases:
   alert    fill only if the next bar trades through entry_ref (at the open on a gap above it)
   took     the user's actual entry, from the next bar (journal status 'took')
@@ -32,13 +32,17 @@ def _qty(entry: float, stop: float, qty: int | None, capital: float, risk_pct: f
     return max(1, int(capital * risk_pct / 100 // r)) if r > 0 else 0
 
 
+FLAT_BY = "15:20"     # MIS flat by 15:20 everywhere (user 2026-11-05, PREREG_PAPER_PORTFOLIO 4)
+LAST_BAR_START = (15, 0)   # so the last 15m bar held is 15:00-15:15, exited at its close
+
+
 def slots_left(bar_start) -> int:
-    """15m bars after the alert's bar up to the 15:15-15:30 bar (user 2026-11-04: a 15m alert
-    is flat by the end of its session)."""
-    import datetime as _dt
+    """15m bars after the alert's bar up to the 15:00-15:15 bar: a 15m alert is flat by 15:20,
+    exited at the close of the last bar that ends before it (one rule for the grader, the live
+    tracker and Telegram)."""
     from drishti.core.clock import IST
     t = bar_start.astimezone(IST)
-    last = t.replace(hour=15, minute=15, second=0, microsecond=0)
+    last = t.replace(hour=LAST_BAR_START[0], minute=LAST_BAR_START[1], second=0, microsecond=0)
     return max(0, int((last - t).total_seconds() // 900))
 
 
