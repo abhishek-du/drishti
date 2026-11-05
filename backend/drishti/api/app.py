@@ -19,7 +19,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 
-from drishti.api import chart_api, scan_api
+from drishti.api import chart_api, pf_api, scan_api
 from drishti.core.clock import today
 from drishti.core.config import BACKEND
 from drishti.core.db import prajna_sessionmaker, sessionmaker
@@ -34,6 +34,7 @@ LIVE_LABEL = "LIVE VIEW - not used by drishti-swing-v1"
 app = FastAPI(title="Drishti", docs_url="/api/docs", openapi_url="/api/openapi.json")
 app.include_router(chart_api.router)  # Track C chart endpoints (read only)
 app.include_router(scan_api.router)   # scanner + journal (decision support; the only writes)
+app.include_router(pf_api.router)     # paper portfolio pf-v1 (read only)
 
 
 def _f(x):

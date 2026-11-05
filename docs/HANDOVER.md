@@ -84,6 +84,18 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **Cron lines not yet installed** (`ops/cron.txt`): `news` every 30 min, and the 3 scanner lines (`scan_eod` 19:45, `scan_intraday` every 15 min, `scan_grade` 09:45). The crontab has 13 Drishti lines now; with all four it becomes 17, and 18 with `intraday` (01:00).
 - **Telegram for the scanner:** optional; set `DRISHTI_TELEGRAM_BOT_TOKEN` and `DRISHTI_TELEGRAM_CHAT_ID` in `backend/.env` (otherwise the alert list is only logged).
 
+**Paper portfolio pf-v1 (2026-11-05):**
+- Spec review: `PAPER_PORTFOLIO_REVIEW.md`. Pre-registration FROZEN in `PREREG_PAPER_PORTFOLIO.md`; DEVIATIONS D7.
+- **Phase 1 is built:**
+  - the `pf_*` tables (migration 0014);
+  - `drishti/paper/ledger.py` (fills, costs from `core.costs` incl. MIS legs, positions + append-only events, trades, mark-to-market, equity snapshot, benchmark);
+  - `drishti/paper/run.py` (`init` / `mtm` / `snapshot`);
+  - the read API `/api/portfolio…`;
+  - a read-only `/portfolio` page (not in the nav: Track C).
+- **No portfolio has been initialised in prod yet:** `init` runs at the forward start, so the benchmark base matches.
+- **Next:** Phase 2 (paper trader + risk manager).
+- MIS is flat by 15:20 everywhere from 2026-11-05: the last 15m bar is 15:00–15:15.
+
 **Telegram (2026-11-04, DEVIATIONS D6):**
 - Drishti sends to the bot and chat Prajna used, from the 11-05 session on. A test message was sent and delivered on 11-04.
 - Routing: swing alerts and their outcomes are individual; 15m alerts go in one digest per bar and their outcomes in one end-of-day digest. Exceptions: the watchlist top 10, Live Radar names, and anything marked in the journal.
