@@ -93,7 +93,10 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
   - the read API `/api/portfolio…`;
   - a read-only `/portfolio` page (not in the nav: Track C).
 - **No portfolio has been initialised in prod yet:** `init` runs at the forward start, so the benchmark base matches.
-- **Next:** Phase 2 (paper trader + risk manager).
+- **Phase 2 is built, tested, NOT started** (2026-11-05): `paper/risk.py` (sizing + caps), `paper/gates.py` (regime → odds → results veto), `paper/trader.py` (four books, decide / fill / exit, 15m observe mode, `run_session`).
+  - **Finding:** with 1 % risk per trade, the 3 % open-risk cap allows only **3** full-size positions; the 5-position cap only binds when trades are smaller.
+  - **Finding:** no BOARD_MEETINGS CSV has ever been loaded, so the results gate says UNKNOWN and every candidate is skipped until a fresh CSV (< 4 days old) is in `drishti_data/manual/`.
+- **Next:** Phase 3 (the cron loop + `paper.run init` = the forward start), at the 2026-11-20 switch, on the user's word.
 - MIS is flat by 15:20 everywhere from 2026-11-05: the last 15m bar is 15:00–15:15.
 
 **Telegram (2026-11-04, DEVIATIONS D6):**

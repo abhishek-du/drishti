@@ -344,9 +344,16 @@ def test_15m_alerts_and_outcomes_go_out_as_digests_once():
                         returning id"""), {"r": rid, "d": day, "bt": bt, "k": key,
                                           "sym": sym})).scalar())
                 await s.commit()
-                o1 = await notify.deliver_alerts(s, "15m")
-                assert o1 == {"digest_logged": 1}                     # one digest, not three
-                assert await notify.deliver_alerts(s, "15m") == {}   # never again
+                await notify.deliver_alerts(s, "15m")
+                mine = (await s.execute(text("""select status, text from notify_event
+                    where kind = 'ALERT' and ref = any(:r)"""),
+                    {"r": [f"alert:{i}" for i in ids]})).all()
+                assert len(mine) == 3 and {m.status for m in mine} == {"digested"}
+                assert len({m.text for m in mine}) == 1               # one digest, not three
+                await notify.deliver_alerts(s, "15m")                 # never again
+                assert (await s.execute(text("""select count(*) from notify_event
+                    where kind = 'DIGEST_15M' and ref like :r"""),
+                    {"r": f"digest15:{day}%"})).scalar() == 1
                 txt = (await s.execute(text("""select text from notify_event
                     where kind = 'DIGEST_15M' and ref like :r"""),
                     {"r": f"digest15:{day}%"})).scalar()

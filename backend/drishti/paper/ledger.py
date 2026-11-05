@@ -283,3 +283,24 @@ async def snapshot(s, day: _dt.date, ts: _dt.datetime) -> dict:
         out[p["id"]] = round(float(p["equity"]), 2)
     await s.commit()
     return {"date": str(day), "equity": out, "benchmark": bench}
+
+
+async def record_unfilled(s, pid: str, book: str, *, instrument_key: str, symbol: str | None,
+                          side: str, qty: int, ts: _dt.datetime, status: str, reason_code: str,
+                          reason_text: str, order_type: str = "SL",
+                          trigger_price: float | None = None, stop: float | None = None,
+                          target: float | None = None, source_alert_id: int | None = None,
+                          decision_id: int | None = None, product: str | None = None) -> int:
+    """A paper order that did not fill (buy-stop not triggered, expired, invalid), written once
+    with its final status ('cancelled' or 'rejected'); no fill, no cash or position change."""
+    oid = (await s.execute(text("""insert into pf_order(portfolio_id, book, ts, instrument_key,
+        symbol, side, product, order_type, qty, trigger_price, status, source_alert_id,
+        decision_id, reason_code, reason_text, stop, target) values (:i, :b, :t, :k, :sym, :sd,
+        :pr, :ot, :q, :tp, :st, :a, :d, :rc, :rt, :stop, :tg) returning id"""),
+        {"i": pid, "b": book, "t": ts, "k": instrument_key, "sym": symbol, "sd": side,
+         "pr": product or ("MIS" if book == "intraday" else "CNC"), "ot": order_type,
+         "q": max(1, qty), "tp": trigger_price, "st": status, "a": source_alert_id,
+         "d": decision_id, "rc": reason_code, "rt": reason_text, "stop": stop,
+         "tg": target})).scalar()
+    await s.commit()
+    return oid

@@ -87,3 +87,16 @@ The **Nifty 500 price index** (`index_bar`, `NSE_INDEX|Nifty 500`) for now, buy-
 ## 8. What does not change
 
 Scout (`scout-b-v1`), the scanner detectors (`scan-v1`), the EOD watchlist, drishti-swing-v1 and the closed research families. No real order path exists or will be added by this work.
+
+
+## Build notes (not changes to the frozen values)
+
+- **2026-11-05, Phase 2 build:**
+  - The caps reduce qty to fit (position, open risk, cash buffer); a qty below 1 is rejected with the binding cap as the reason (`SKIP_CAP_*`).
+  - Pending entries (decided, not yet filled) count toward the open positions and the open risk, and their planned value is reserved from cash.
+  - With 1 % per trade, the 3 % open-risk cap means at most 3 full-size positions at a time.
+- **Swing decisions:**
+  - A swing decision is made at the alert's time (its 19:45 scan) on the latest snapshot.
+  - The fill is simulated on the next session's official bar; its time of day is unknown, so it is recorded at 09:15 IST.
+  - Stop / target / time exits are recorded at 15:30 of the exit day; a regime exit at the 09:15 open.
+- **Results gate:** with no fresh board-meetings CSV (missing or older than 4 days) the results calendar is UNKNOWN, so the candidate is skipped (`SKIP_RESULTS_UNKNOWN`), as frozen.
