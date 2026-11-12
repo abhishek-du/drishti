@@ -1,5 +1,5 @@
 """Nightly odds for the day's 1d scanner alerts -> odds_result (user 2026-11-04). RESEARCH /
-SIMULATION, NOT a signal (Track B's engine: drishti.judge.odds, odds-1d-v1).
+SIMULATION, NOT a signal (Track B engine: drishti.judge.odds, odds-1d-v2 since 2026-11-12).
 
     .venv/bin/python -m drishti.scanner.odds_job [--session D] [--n 10000]
 
@@ -42,6 +42,8 @@ HORIZON = HOLD["1d"]
 
 
 def verdict_kind(v: str) -> str:
+    if v.startswith("THIN SAMPLE"):              # odds v2 prefix (replay N < 30)
+        return "THIN SAMPLE"
     if v.startswith("Net R:R"):
         return "BASE RATES LOSE" if "LOSE" in v else "ABOUT BREAK-EVEN" if "about break-even" \
             in v else "CLEARS BREAK-EVEN"
