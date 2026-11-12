@@ -1,6 +1,7 @@
 """D1 copy (SWITCH_TO_B Option 2): Prajna's history -> Drishti, lossless, verified.
 
     .venv/bin/python -m drishti.switch.d1copy plan
+    .venv/bin/python -m drishti.switch.d1copy views --target drishti_test   # re-point views
     .venv/bin/python -m drishti.switch.d1copy copy --target drishti_test --out DIR \
         [--tf 1d,1h,15m,5m,1m] [--months 2026-09,2026-10] [--tables a,b|none] [--delta]
 
@@ -252,6 +253,30 @@ def _same(a: dict, b: dict) -> bool:
     return all(Decimal(str(a[k])) == Decimal(str(b[k])) for k in keys)
 
 
+# ---- views (re-point) -------------------------------------------------------------------
+
+# Prajna views Drishti reads, recreated inside the copy schema over the copied tables. ohlcv_bar
+# in the copy is the 1d table only (intraday history lives in the Parquet copy).
+VIEWS = ("canon_ca_factor", "canon_market_bar")
+
+
+def make_views(target: str) -> dict:
+    """Create (or replace) the copy schema's views from Prajna's own definitions, resolved
+    against the copied tables (search_path = prajna_copy)."""
+    out = {}
+    stmts = [f"set search_path = {SCHEMA}",
+             f"create or replace view {SCHEMA}.ohlcv_bar as select * from {SCHEMA}.ohlcv_bar_1d"]
+    for v in VIEWS:
+        d = sql("prajna", f"select pg_get_viewdef('public.{v}'::regclass, true)")
+        body = "\n".join("|".join(r) for r in d).strip().rstrip(";")
+        stmts.append(f"create or replace view {SCHEMA}.{v} as {body}")
+    stmts.append(f"grant select on all tables in schema {SCHEMA} to {APP_ROLE}")
+    sql(target, ";\n".join(stmts) + ";", False)
+    for v in ("ohlcv_bar",) + VIEWS:
+        out[v] = int(sql(target, f"select count(*) from {SCHEMA}.{v}", False)[0][0])
+    return out
+
+
 # ---- commands ---------------------------------------------------------------------------
 
 def plan() -> dict:
@@ -321,6 +346,8 @@ def copy(target: str, out: Path, tfs: list[str], months: list[str] | None,
                            "written": sum(counts.values()), "mismatch": bad,
                            "bytes": sum(f.stat().st_size for f in (out / tf).rglob("*.parquet"))}
         rep["ok"] &= not bad
+    if "1d" in tfs:
+        rep["views"] = make_views(target)
     state["runs"].append({"w": w, "stamp": stamp, "delta": delta, "tfs": tfs,
                           "months": months, "ok": rep["ok"]})
     state_f.write_text(json.dumps(state, indent=1))
@@ -329,10 +356,12 @@ def copy(target: str, out: Path, tfs: list[str], months: list[str] | None,
 
 
 def main(argv: list[str]) -> dict:
-    if not argv or argv[0] not in ("plan", "copy"):
+    if not argv or argv[0] not in ("plan", "copy", "views"):
         raise SystemExit(__doc__)
     if argv[0] == "plan":
         return plan()
+    if argv[0] == "views":
+        return make_views(argv[argv.index("--target") + 1])
     a = dict(zip(argv[1::2], argv[2::2])) if "--delta" not in argv else \
         dict(zip([x for x in argv[1:] if x != "--delta"][0::2],
                  [x for x in argv[1:] if x != "--delta"][1::2]))

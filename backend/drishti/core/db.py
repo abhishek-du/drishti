@@ -15,9 +15,23 @@ def engine() -> AsyncEngine:
     return create_async_engine(get_settings().DRISHTI_DATABASE_URL, pool_pre_ping=True)
 
 
+COPY_SCHEMA = "prajna_copy"
+
+
 @lru_cache
 def prajna_engine() -> AsyncEngine:
-    return create_async_engine(get_settings().DRISHTI_PRAJNA_RO_URL, pool_pre_ping=True)
+    """Prajna's history: its live DB (read-only role) or, after the re-point, the verified D1
+    copy inside Drishti's own DB (schema prajna_copy, read-only sessions). Every reader keeps
+    its queries; only the connection changes."""
+    cfg = get_settings()
+    if cfg.DRISHTI_HISTORY_SOURCE == "copy":
+        return copy_engine(cfg.DRISHTI_DATABASE_URL)
+    return create_async_engine(cfg.DRISHTI_PRAJNA_RO_URL, pool_pre_ping=True)
+
+
+def copy_engine(url: str) -> AsyncEngine:
+    return create_async_engine(url, pool_pre_ping=True, connect_args={"server_settings": {
+        "search_path": f"{COPY_SCHEMA},public", "default_transaction_read_only": "on"}})
 
 
 def sessionmaker() -> async_sessionmaker:

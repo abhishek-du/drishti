@@ -15,6 +15,10 @@ class Settings(BaseSettings):
 
     DRISHTI_DATABASE_URL: str
     DRISHTI_PRAJNA_RO_URL: str
+    # re-point (SWITCH_TO_B part 5): where Drishti reads Prajna's history. prajna_live = Prajna's
+    # DB through drishti_ro (today); copy = the D1 copy in Drishti's own DB (schema prajna_copy,
+    # read only). Flipped at the 2026-11-20 switch after the copy is verified.
+    DRISHTI_HISTORY_SOURCE: str = "prajna_live"
     DRISHTI_DATA_DIR: Path = Path("/windows/drishti_data")
     DRISHTI_UPSTOX_TOKEN_FILE: Path = Path("/home/cis/windows/prajna/backend/var/upstox_token.json")
     # share of the Upstox per-API budget (50/s, 500/min, 2000/30 min per user) Drishti may use;

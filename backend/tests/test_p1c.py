@@ -264,3 +264,24 @@ def test_master_marks_fo_underlyings():
              "underlying_key": "NSE_INDEX|Nifty 50", "underlying_type": "INDEX"}]
     total, kept = master.parse(gzip.compress(json.dumps(rows).encode()))
     assert total == 4 and kept["NSE_EQ|A"]["fo"] is True and kept["NSE_EQ|B"]["fo"] is False
+
+
+def test_history_source_flag_points_the_prajna_engine_at_the_copy(monkeypatch):
+    """Re-point (2026-11-12): DRISHTI_HISTORY_SOURCE=copy makes every 'Prajna' reader use the
+    D1 copy in Drishti's own DB (schema prajna_copy, read-only sessions); default unchanged."""
+    from drishti.core import config, db
+    config.get_settings.cache_clear()
+    db.prajna_engine.cache_clear()
+    try:
+        assert config.get_settings().DRISHTI_HISTORY_SOURCE == "prajna_live"
+        live = db.prajna_engine()
+        assert live.url.database == "prajna"
+        monkeypatch.setenv("DRISHTI_HISTORY_SOURCE", "copy")
+        config.get_settings.cache_clear()
+        db.prajna_engine.cache_clear()
+        e = db.prajna_engine()
+        assert e.url.database == "drishti_test"          # tests: Drishti's own (test) DB
+    finally:
+        monkeypatch.delenv("DRISHTI_HISTORY_SOURCE", raising=False)
+        config.get_settings.cache_clear()
+        db.prajna_engine.cache_clear()

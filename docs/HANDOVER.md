@@ -53,7 +53,19 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
    1. ~~Upstox `/v2/news` ingest~~ DONE 2026-11-02 (migration 0007, `p1 news`). The first live run had 120 requests, 0 errors, 173 articles. Versus Prajna over 6 days: 133 common, 60 only in Prajna, because the vendor drops older articles of busy stocks before 7 days and Prajna polls every 30 min. Fix: the 30-min cron (`ops/cron.txt`); the pre-switch gap is filled by the D1 copy.
    2. ~~Nightly intraday for the top 500~~ BUILT 2026-11-03 (`p1 intraday`, `drishti/data/intraday.py`; files in `/windows/drishti_data/intraday/`, overlap check vs Prajna in the run counts). Cron `0 1 * * 2-6` pending user install. First real run = the first night after install. The 1m gap 2026-04-29 → 07-17 stays for after the switch (D3; ~0.5 GB).
    3. ~~The D1 copy tool~~ BUILT 2026-11-03 (`drishti/switch/d1copy.py`; `plan` / `copy [--delta]`). Dry run into `drishti_test` for 2026-09: 63/63 tables and 1d/1h/15m/1m bars all equal (count, OHLCV sums, md5 hash); delta path OK. 23 min for 28 M rows (1m 243 MB/month). Full copy #1 into `drishti` (after a backup) is planned for 11-11 night: ~230 M rows, ~3 h, ~3 GB on /windows (`/windows/drishti_data/prajna_copy/`). The dry-run output in `/windows/drishti_data/prajna_copy_dryrun/` can be deleted after that.
-   4. Re-point Drishti's reads (**include CA adjustment of the intraday/15m read path: DEVIATIONS D5**) (`bars.py`, `bar_check`, `eod_quotes.universe_keys`, `run/p2.py`, the API) from Prajna's live DB to Drishti's tables, behind a flag.
+   3b. **D1 copy #1 started 2026-11-12** (`ops/runbooks/d1_copy_first.sh`, detached):
+      - it waits for Prajna's candle jobs and 20:00 IST, takes a backup + sha256, then copies;
+      - log: `/windows/drishti_data/prajna_copy/run_20261112.log`;
+      - a watcher (`d1_copy_verify_after.sh`) then runs `drishti.switch.repoint verify` on prod.
+   4. **Re-point step 1 built 2026-11-12:**
+      - `d1copy views` recreates Prajna's `canon_market_bar` / `canon_ca_factor` (+ `ohlcv_bar` = the 1d table) inside `prajna_copy`;
+      - the flag `DRISHTI_HISTORY_SOURCE=copy` points every Prajna reader at the copy (read-only sessions);
+      - `repoint verify`: `bars.official` on copy == live for 50 random + all CA stocks. The dry run (2026-09) gave 190 stocks, 0 mismatches.
+
+      **Still to do** (include CA adjustment of the intraday/15m read path: DEVIATIONS D5):
+      - the intraday readers on the Parquet copy + Drishti's own intraday;
+      - the union with Drishti's own 1d ingest after the switch;
+      - the remaining readers (`bars.py`, `bar_check`, `eod_quotes.universe_keys`, `run/p2.py`, the API) from Prajna's live DB to Drishti's tables, behind a flag.
    5. Vendor-applied detection for older CAs, once the copy brings Prajna's bars and observations.
    6. The switch scripts and checklist.
 2. **The switch on 2026-11-20** (`SWITCH_TO_B.md` 6.2):
