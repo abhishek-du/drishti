@@ -10,3 +10,4 @@ drishti_data/
 *.parquet
 *.zst
 *.egg-info/
+web/tsconfig.tsbuildinfo
