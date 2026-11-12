@@ -124,3 +124,25 @@ async def daily(s, ps, day: _dt.date, days: int = 450, as_of: _dt.datetime | Non
     off = off[off.session_date < day]
     return pd.concat([off, prov[off.columns]], ignore_index=True).sort_values(
         ["instrument_key", "session_date"]).reset_index(drop=True), "provisional"
+
+
+async def provisional_range(s, key: str, after: _dt.date, before: _dt.date) -> pd.DataFrame:
+    """Drishti's provisional (15:40 EOD quote) bars of `key` for the sessions strictly between
+    `after` and `before`: a gap filler for a display when Prajna's official bar of a session is
+    late (2026-11-12: its morning job missed 11-11). Raw prices (no CA adjustment); the official
+    bar replaces it as soon as it is stored. Not used by Scout, the scanner or any test."""
+    rows = (await s.execute(text("""
+        with r as (select distinct on (r.session_date) r.run_id, r.session_date from run r
+                   join run_end e using (run_id) where r.kind = 'P1_EOD' and e.status = 'OK'
+                   and r.session_date > :a and r.session_date < :b
+                   order by r.session_date, r.started_at)
+        select q.session_date, q.open, q.high, q.low, q.close, q.volume from eod_quote q
+        join r using (run_id) where q.instrument_key = :k
+          and (q.quote_ts at time zone 'Asia/Kolkata')::date = q.session_date"""),
+        {"a": after, "b": before, "k": key})).all()
+    df = pd.DataFrame(rows, columns=["session_date", *COLS])
+    for c in COLS:
+        df[c] = df[c].astype(float)
+    df["instrument_key"] = key
+    df["net"] = 1.0
+    return df

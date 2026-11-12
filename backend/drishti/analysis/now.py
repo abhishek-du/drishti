@@ -51,6 +51,13 @@ async def analyse(s, ps, key: str, live, ltp: float | None = None, n_paths: int 
     day = t.date()
     hist = await bars.official(ps, day, 450, keys=[key])
     hist = hist[hist.session_date < day].sort_values("session_date")
+    gap_days: list[str] = []
+    if not hist.empty:                  # official bar late (Prajna missed a job): Drishti's 15:40
+        gap = await bars.provisional_range(s, key, hist.session_date.max(), day)
+        if not gap.empty:
+            gap_days = [str(d) for d in gap.session_date]
+            hist = pd.concat([hist, gap[hist.columns.intersection(gap.columns)]],
+                             ignore_index=True).sort_values("session_date")
     if hist.empty or len(hist) < 60:
         return {"label": LABEL, "key": key, "error": "not enough daily history"}
     q = get_live_quote(key) if ltp is None else None
@@ -146,6 +153,7 @@ async def analyse(s, ps, key: str, live, ltp: float | None = None, n_paths: int 
     out = {
         "label": LABEL, "key": key, "symbol": sym, "as_of": t.isoformat(),
         "history": {"daily_bars_until": str(hist_last), "previous_session": str(want_prev),
+                    "provisional_filled": gap_days,
                     "lagging": hist_last < want_prev,
                     "note": f"daily history ends {hist_last}; the {want_prev} bar is not stored yet"
                     if hist_last < want_prev else None},
@@ -157,7 +165,11 @@ async def analyse(s, ps, key: str, live, ltp: float | None = None, n_paths: int 
         "context": {"regime": (reg[1] or {}).get("status") if reg else None,
                     "spec_gate": (reg[1] or {}).get("spec_gate") if reg else None,
                     "regime_session": str(reg[0]) if reg else None,
-                    "trend": levels.trend(b, ind), "sma50": _f(r.sma50), "sma200": _f(r.sma200),
+                    "trend": levels.trend(b, ind),
+                    "trend_rule": "swing structure (last two pivot highs/lows: HH+HL = UP)",
+                    "ma_trend_up": bool(ltp > r.sma50 > r.sma200 and r.sma200_slope20 > 0),
+                    "ma_trend_rule": "Scout's: close > SMA50 > SMA200, SMA200 rising (20 sessions)",
+                    "sma50": _f(r.sma50), "sma200": _f(r.sma200),
                     "above_sma50": bool(ltp > r.sma50), "above_sma200": bool(ltp > r.sma200),
                     "rsi14": _f(r.rsi, 1), "atr": _f(atr), "atr_pct": _f(100 * atr / ltp),
                     "hi52": _f(r.hi52), "pct_below_52w_high": _f(100 * (1 - ltp / r.hi52))},

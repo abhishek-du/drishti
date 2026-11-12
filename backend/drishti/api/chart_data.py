@@ -242,6 +242,12 @@ async def _load_1d(key: str) -> tuple[pd.DataFrame, list[dict]]:
         prov = await bars.provisional(s, day)
     prov = prov[prov.instrument_key == key]
     df = df.assign(src="official")
+    if not df.empty:                    # a late official bar (Prajna missed a morning job):
+        # fill the sessions in between with Drishti's own 15:40 provisional bar
+        async with sessionmaker()() as s2:
+            gap = await bars.provisional_range(s2, key, df.session_date.max(), day)
+        if not gap.empty:
+            df = pd.concat([df, gap.assign(src="provisional")[df.columns]], ignore_index=True)
     if not prov.empty and (df.empty or df.session_date.max() < day):
         df = pd.concat([df, prov.assign(src="provisional")[df.columns] if not df.empty
                         else prov.assign(src="provisional")], ignore_index=True)

@@ -454,3 +454,39 @@ def test_web_alert_layer_always_on():
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
     assert "pass 5" in r.stdout
+
+
+def test_provisional_range_fills_a_late_official_session():
+    """2026-11-12: Prajna's 11-11 official bar was late; displays fill the gap with Drishti's own
+    15:40 provisional bar of that session (first OK EOD run), never a later session."""
+    import asyncio
+    import datetime as dt
+    import random
+    from sqlalchemy import text
+    from drishti.core import db
+    from drishti.data import bars
+
+    async def go():
+        try:
+            async with db.sessionmaker()() as s:
+                d = dt.date(2033, 1, 3) + dt.timedelta(days=random.randint(0, 3000))
+                key = f"NSE_EQ|TGAP{random.randint(0, 10**6)}"
+                rid = (await s.execute(text("""insert into run(run_id, kind, session_date,
+                    code_sha, params) values (gen_random_uuid(), 'P1_EOD', :d, 't', '{}')
+                    returning run_id"""), {"d": d})).scalar()
+                await s.execute(text("""insert into run_end(run_id, status, counts)
+                    values (:r, 'OK', '{}')"""), {"r": rid})
+                await s.execute(text("""insert into eod_quote(run_id, instrument_key, session_date,
+                    open, high, low, close, last_price, volume, quote_ts, fetched_at) values (:r, :k,
+                    :d, 100, 105, 98, 104, 104, 5000, :qt, now())"""),
+                    {"r": rid, "k": key, "d": d,
+                     "qt": dt.datetime.combine(d, dt.time(15, 29), dt.timezone(dt.timedelta(hours=5, minutes=30)))})
+                await s.commit()
+                g = await bars.provisional_range(s, key, d - dt.timedelta(days=2), d + dt.timedelta(days=1))
+                assert len(g) == 1 and g.session_date.iloc[0] == d and g.close.iloc[0] == 104
+                assert (await bars.provisional_range(s, key, d, d + dt.timedelta(days=1))).empty
+        finally:
+            await db.engine().dispose()
+            db.engine.cache_clear()
+
+    asyncio.run(go())

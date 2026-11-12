@@ -8,9 +8,10 @@ import { fmt, get } from "@/components/api";
 type Num = number | null;
 type A = {
   label: string; symbol: string | null; as_of: string; error?: string;
-  history: { daily_bars_until: string; previous_session: string; lagging: boolean; note: string | null };
+  history: { daily_bars_until: string; previous_session: string; lagging: boolean; note: string | null; provisional_filled: string[] };
   price: { ltp: Num; source: string; prev_close: Num; prev_close_source: string; change_pct: Num; today: { open: Num; high: Num; low: Num } };
-  context: { regime: string | null; spec_gate: string | null; regime_session: string | null; trend: string; sma50: Num; sma200: Num;
+  context: { regime: string | null; spec_gate: string | null; regime_session: string | null; trend: string; trend_rule: string;
+    ma_trend_up: boolean; ma_trend_rule: string; sma50: Num; sma200: Num;
     above_sma50: boolean; above_sma200: boolean; rsi14: Num; atr: Num; atr_pct: Num; hi52: Num; pct_below_52w_high: Num };
   levels: { support: { bottom: Num; top: Num; touches: number } | null; resistance: { bottom: Num; top: Num; touches: number } | null;
     pct_to_support: Num; pct_to_resistance: Num };
@@ -59,6 +60,7 @@ export default function AnalysisPanel({ instrumentKey }: { instrumentKey: string
         <h3 style={{ margin: "6px 0" }}>Analysis now · {a.symbol ?? instrumentKey}</h3>
         <span className="muted small">updated {ist(a.as_of)} IST{marketOpen() ? " · refreshes every 30 s" : ""}</span>
       </div>
+      {a.history.provisional_filled.length > 0 && <p className="muted small">Official daily bar not stored yet for {a.history.provisional_filled.join(", ")}: Drishti&apos;s 15:40 provisional bar is used until it arrives.</p>}
       {a.history.lagging && <p className="pill warn small">{a.history.note} (indicators use the stored history + today&apos;s live bar)</p>}
       <div className="grid2" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
         <div>
@@ -68,7 +70,8 @@ export default function AnalysisPanel({ instrumentKey }: { instrumentKey: string
           <b>Context</b>
           <ul className="small">
             <li>Market regime: <b>{c.regime ?? "–"}</b> (spec gate {c.spec_gate ?? "–"}, as of {c.regime_session})</li>
-            <li>Trend (daily rule): <b>{c.trend}</b> · {c.above_sma50 ? "above" : "below"} SMA50 {fmt(c.sma50)} · {c.above_sma200 ? "above" : "below"} SMA200 {fmt(c.sma200)}</li>
+            <li title={c.ma_trend_rule}>MA trend (Scout&apos;s rule): <b>{c.ma_trend_up ? "UP" : "not UP"}</b> · {c.above_sma50 ? "above" : "below"} SMA50 {fmt(c.sma50)} · {c.above_sma200 ? "above" : "below"} SMA200 {fmt(c.sma200)}</li>
+            <li title={c.trend_rule}>Swing structure (pivots): <b>{c.trend}</b>{c.ma_trend_up && c.trend === "SIDE" ? " — long-term uptrend, short-term range" : ""}</li>
             <li>RSI14 {fmt(c.rsi14, 1)} · ATR {fmt(c.atr)} ({fmt(c.atr_pct, 1)}%) · {fmt(c.pct_below_52w_high, 1)}% below the 52-week high {fmt(c.hi52)}</li>
             <li>Support: {l.support ? `${fmt(l.support.bottom)}–${fmt(l.support.top)} (${l.support.touches}×, ${pct(l.pct_to_support)})` : "none found below"}</li>
             <li>Resistance: {l.resistance ? `${fmt(l.resistance.bottom)}–${fmt(l.resistance.top)} (${l.resistance.touches}×, ${pct(l.pct_to_resistance)})` : "none found above"}</li>
