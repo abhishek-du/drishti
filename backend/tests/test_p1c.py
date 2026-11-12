@@ -391,3 +391,50 @@ def test_history_union_adds_own_bars_after_the_cutover_only(monkeypatch):
         assert (b.session_date <= cut).sum() > 0                        # the copy part is there
 
     asyncio.run(go())
+
+
+def test_history_union_counts_a_session_and_a_ca_once():
+    """P4 findings (2026-11-12): with a cutover before the copy's end, the copy's bars and CA
+    factors after the cutover must not be read (they were read next to Drishti's own, so a split
+    was applied twice); Drishti's append-only ca_factor gives the newest row per event; an
+    event fetched under an issuer's old and new ISIN (same content sha) counts once."""
+    import uuid
+    import pytest
+    from drishti.switch import d1copy as D
+    from drishti.switch import repoint
+
+    try:
+        cut = repoint.make_history_views("drishti_test", "2026-09-15")["cutover"]
+    except Exception as e:                       # no dry-run copy schema on this host
+        pytest.skip(f"no prajna_copy in drishti_test: {e}")
+    q = lambda sql: D.sql("drishti_test", sql, False)  # noqa: E731
+    try:
+        assert cut == "2026-09-15"
+        n = q("""select count(*) from history.ohlcv_bar where session_date > '2026-09-15'
+                 and source <> 'DRISHTI_UPSTOX_V3'""")[0][0]
+        assert int(n) == 0
+        n = q("""select count(*) from history.canon_ca_factor where ca_id < 1000000000
+                 and ex_date > '2026-09-15'""")[0][0]
+        assert int(n) == 0
+        sha = uuid.uuid4().hex * 2
+        ids = q(f"""with r as (insert into run(run_id, kind, code_sha, params) values
+              (gen_random_uuid(), 'TEST_HIST_CA', 't', '{{}}') returning run_id),
+            p as (insert into ca_payload(run_id, isin, http_status) select run_id, 'INEZZ9T01018',
+              200 from r returning id, run_id),
+            c as (insert into corporate_action(payload_id, isin, instrument_key, action_type,
+              ex_date, content_sha256, vendor_payload, first_seen_at, knowable_at)
+              select p.id, v.isin, 'NSE_EQ|' || v.isin, 'SPLIT', date '2033-03-03', '{sha}',
+                '{{}}'::jsonb, v.t, v.t from p, (values ('INEZZ9T01018', now() - interval '1 day'),
+                ('INEZZ9T01026', now())) v(isin, t) returning id, isin)
+            select c.id, c.isin, p.run_id from c, p order by c.isin""")
+        for ca, _isin, rid in ids:
+            for va in ("UNKNOWN", "APPLIED"):          # a re-derivation adds a row
+                q(f"""insert into ca_factor(ca_id, run_id, status, method, factor_price,
+                      factor_volume, vendor_applied, reason, method_version) values
+                      ({ca}, '{rid}', 'EXACT', 'SPLIT_FV', 5, 5, '{va}', 't', 'cafactor-v1')""")
+        own = ",".join(str(int(ca) + 1000000000) for ca, _i, _r in ids)
+        rows = q(f"""select substr(instrument_key, 8), vendor_applied
+                     from history.canon_ca_factor where ca_id in ({own})""")
+        assert [tuple(r) for r in rows] == [("INEZZ9T01026", "APPLIED")]
+    finally:
+        repoint.make_history_views("drishti_test")

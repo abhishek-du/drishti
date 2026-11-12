@@ -15,7 +15,7 @@ Every step is one command of `ops/switch/switch.sh <step>`. It logs `SWITCH_<STE
 | P1 | The Drishti app's Upstox keys are in `backend/.env`: `DRISHTI_UPSTOX_API_KEY`, `_API_SECRET`, `_REDIRECT_URL`, `_USERNAME`, `_PIN`, `_TOTP_SECRET` | U | `flip status` shows every field as `set` |
 | P2 | One test login on a weekend (with no session to disturb). Set `LOGIN_ENABLED=true` and the own token file in a temporary env, run `drishti_job.sh login`, then put the flags back | A | `DRISHTI_LOGIN_OK MINTED` |
 | P3 | D1 copy #1 + verify + re-point verify + history views (11-12 night) | A | `D1COPY_DONE verify_ok=True`, `REPOINT_VERIFY rc=0`, `HISTORY_VIEWS rc=0` |
-| P4 | Union check: `repoint history --target drishti --cutover <a date ~2 weeks back>`, then `repoint verify`. Drishti's own bars after that date must give the same adjusted series as Prajna. Then `repoint history` again, which puts the cutover back to the copy end | A | `ok: true` |
+| P4 | Union check: `repoint history --target drishti --cutover <a date ~2 weeks back>`, then `repoint verify --tol 0.001 --day <the last session Drishti's own 1d has>`. Drishti's own bars after that date must give the same adjusted series as Prajna. Then `repoint history` again, which puts the cutover back to the copy end | A | `ok: true` |
 | P5 | Shadow days: Scout + EOD scan on both sources, compared | A | no unexplained difference |
 | P6 | Board-meetings CSV Mon 11-16 and Thu 11-19 | U | `manual` job OK, not STALE |
 | P7 | Second archive location decided (an external disk or an rclone crypt remote) | U | path known |
@@ -68,3 +68,26 @@ Every step is one command of `ops/switch/switch.sh <step>`. It logs `SWITCH_<STE
 | preflight | FAIL on the dirty git tree only (the code was uncommitted at the time) |
 
 **Why INE0CJD01037 differs:** the rehearsal copy holds only 2026-09. One Upstox payload carries that stock's September-to-November bars. The observation saying "the vendor served this payload raw" is on the November bars, which are not in that copy. Prod copies every month, so this cannot happen there; tonight's full re-point verify covers every CA stock.
+
+## P3 + P4 results (2026-11-12, prod `drishti`)
+
+**P3.** Copy #1 finished at 21:38: `D1COPY_DONE verify_ok=True`. Rows written per timeframe, every month matched against Prajna:
+
+| Timeframe | Rows | Months |
+|---|---|---|
+| 1d | 3.92 M | 87 |
+| 1h | 20.3 M | 59 |
+| 15m | 71.2 M | 59 |
+| 5m | 55.2 M | 13 |
+| 1m | 96.4 M | 5 |
+
+The Parquet files take 3.0 GB. `REPOINT_VERIFY rc=0` (193 keys, every CA stock), `HISTORY_VIEWS rc=0`.
+
+**P4.** Cutover 2026-10-29. The first run found two bugs in the union views; both are fixed, and a test was added to `test_p1c`:
+
+1. **The copy's bars and CA factors after the cutover were read as well as Drishti's own.** A split was then applied twice (INE0CJD01037: 25× instead of 5×), and a session came from both sides. The views now take the copy only up to the cutover. This also covers a real switch-night case: a CA already announced, with an ex-date after the copy's end, is in both the copy and Drishti's own table.
+2. **Drishti's `ca_factor` is append-only, so each re-derivation adds a row** (UNKNOWN → APPLIED), and every row was applied. The views now read the newest row per event. Also, an event fetched under an issuer's old and new ISIN (an ISIN change at a split, same content sha; INE207H01018 / …026) now counts once.
+
+**Re-run** (`--day 2026-11-10`; Drishti's own 1d of 11-11 arrives only at the 22:40 run): 192 of 193 keys match within 0.009 %. The 0.009 % is vendor rounding (581.8 vs 581.75: Upstox's adjusted bar vs Prajna's raw bar divided by the bonus).
+
+**The one key left, INE0CJD01037, comes from the test setup only.** Prajna's "vendor re-served raw" observations point to Prajna's CA id, and Drishti's own event has another id. That only happens when the cutover is earlier than the copy's end, and Prajna has payloads fetched after an own-table ex-date. At the switch the cutover is the copy's end, so it cannot occur. Afterwards `repoint history` (cutover 2026-11-11, the copy's end) gave an exact `repoint verify`: 0 mismatches.
