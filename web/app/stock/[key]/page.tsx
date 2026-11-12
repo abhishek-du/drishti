@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import type { BarsData, Tf } from "@/components/kchart/KChart";
 import { fmt, get } from "@/components/api";
 import { LIVE_LABEL } from "@/components/live";
+import AnalysisPanel from "@/components/AnalysisPanel";
 
 // klinecharts touches `window` when imported, so the chart loads in the browser only (no SSR)
 const KChart = dynamic(() => import("@/components/kchart/KChart"), {
@@ -158,6 +159,7 @@ export default function Stock() {
           )}
         </div>
       )}
+      <AnalysisPanel instrumentKey={k} />
     </div>
   );
 }
