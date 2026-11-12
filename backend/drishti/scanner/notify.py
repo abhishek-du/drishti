@@ -232,6 +232,14 @@ async def individual_15m(s, day: _dt.date) -> tuple[set[str], set[int]]:
     return top | radar, marked
 
 
+async def _sent_15m_keys(s, day: _dt.date) -> set[str]:
+    """Stocks whose 15m alert of `day` already went out individually (one per stock per day)."""
+    return set((await s.execute(text("""select distinct a.instrument_key from notify_event n
+        join scan_alert a on n.ref = 'alert:' || a.id where n.kind = 'ALERT'
+        and n.status in ('sent', 'logged', 'pending', 'failed') and a.tf = '15m'
+        and a.session_date = :d"""), {"d": day})).scalars())
+
+
 def digest_line(a: dict) -> str:
     ct = choose_target(float(a["entry_ref"]), float(a["stop"]), a["r1"], a["r2"], a["qty"] or 0)
     tag = f" [{ct['tags'][0]}]" if ct["tags"] else ""
@@ -268,11 +276,16 @@ async def deliver_alerts(s, tf: str | None = None, odds_wait_min: int = 40) -> d
     for a in rows:
         if a["tf"] == "15m":
             if a["session_date"] not in exc:
-                exc[a["session_date"]] = await individual_15m(s, a["session_date"])
-            keys, marked = exc[a["session_date"]]
-            if a["instrument_key"] not in keys and a["id"] not in marked:
+                exc[a["session_date"]] = (*await individual_15m(s, a["session_date"]),
+                                          await _sent_15m_keys(s, a["session_date"]))
+            keys, marked, done = exc[a["session_date"]]
+            # individual: a journal-marked alert, or the FIRST 15m alert of the day of a watchlist
+            # top-N / Live Radar stock; everything else goes into the bar digest
+            if a["id"] not in marked and (a["instrument_key"] not in keys
+                                          or a["instrument_key"] in done):
                 groups.setdefault(a["bar_time"], []).append(a)
                 continue
+            done.add(a["instrument_key"])
         has_odds = a.get("mc_target_first") is not None
         if a["tf"] == "1d" and not has_odds and now_ - a["created_at"] < \
                 _dt.timedelta(minutes=odds_wait_min):
@@ -306,6 +319,8 @@ _OUTCOME_SQL = f"""
     with l as (select distinct on (alert_id, basis) * from journal_outcome
                order by alert_id, basis, graded_at desc, id desc)
     select a.*, j.status as jstatus, j.actual_entry,
+           (select n2.status from notify_event n2 where n2.kind = 'ALERT'
+             and n2.ref = 'alert:' || a.id) as alert_status,
            o.outcome, o.entry_used, o.exit_price, o.exit_bar, o.target_used, o.r_net,
            t.outcome as t_outcome, t.entry_used as t_entry, t.r_net as t_r_net
     from scan_alert a join l o on o.alert_id = a.id and o.basis = 'alert'
@@ -317,20 +332,20 @@ _OUTCOME_SQL = f"""
 
 
 async def deliver_outcomes(s) -> dict:
-    """One OUTCOME message per final 1d alert and per final exception 15m alert (target reached
-    / stop hit / expired / entry not triggered). Other 15m outcomes wait for the end-of-day
-    digest (deliver_outcomes_15m)."""
+    """One OUTCOME message per final alert (target reached / stop hit / expired) for: every 1d
+    alert, and a 15m alert whose own alert message went out individually. "Entry not triggered"
+    (NO_FILL) is never sent alone; it goes into the end-of-day digest. A journal-marked
+    (watching / took) alert always gets its own outcome."""
     rows = [dict(r) for r in (await s.execute(text(_OUTCOME_SQL + """
         order by o.exit_bar nulls first, a.id"""), {"since": NOTIFY_SINCE})).mappings()]
     out: dict = {}
-    exc: dict = {}
     for r in rows:
-        if r["tf"] == "15m":
-            if r["session_date"] not in exc:
-                exc[r["session_date"]] = await individual_15m(s, r["session_date"])
-            keys, marked = exc[r["session_date"]]
-            if r["instrument_key"] not in keys and r["id"] not in marked:
-                continue
+        marked_j = r["jstatus"] in ("watching", "took")
+        if not marked_j:
+            if r["outcome"] == "NO_FILL":
+                continue                     # "entry not triggered": end-of-day digest only
+            if r["tf"] == "15m" and r["alert_status"] not in ("sent", "logged"):
+                continue                     # its alert went in a digest: so does its outcome
         mk = None
         if r["jstatus"] in ("watching", "took"):
             mk = r["jstatus"] + (f" at {_f(r['actual_entry'])}" if r["actual_entry"] else "")
@@ -346,18 +361,22 @@ async def deliver_outcomes_15m(s, day: _dt.date) -> str:
     net R, by setup, and one compact line per alert. Call after the session's last bar."""
     if day < NOTIFY_SINCE:
         return "before NOTIFY_SINCE"
-    keys, marked = await individual_15m(s, day)
     rows = [dict(r) for r in (await s.execute(text(_OUTCOME_SQL + """
         and a.tf = '15m' and a.session_date = :d order by a.detector, a.id"""),
         {"since": NOTIFY_SINCE, "d": day})).mappings()]
-    rows = [r for r in rows if r["instrument_key"] not in keys and r["id"] not in marked]
+    rows = [r for r in rows if r["jstatus"] not in ("watching", "took")]
+    # swing alerts whose buy-stop never triggered (graded today or earlier, not yet reported)
+    swing_nf = [dict(r) for r in (await s.execute(text(_OUTCOME_SQL + """
+        and a.tf = '1d' and o.outcome = 'NO_FILL' order by a.session_date, a.id"""),
+        {"since": NOTIFY_SINCE})).mappings()]
+    swing_nf = [r for r in swing_nf if r["jstatus"] not in ("watching", "took")]
     open_n = (await s.execute(text("""
         with l as (select distinct on (alert_id) alert_id, outcome from journal_outcome
                    where basis = 'alert' order by alert_id, graded_at desc, id desc)
         select count(*) from scan_alert a left join l on l.alert_id = a.id
         where a.tf = '15m' and a.session_date = :d
           and (l.outcome is null or l.outcome = 'OPEN')"""), {"d": day})).scalar()
-    if not rows:
+    if not rows and not swing_nf:
         return "nothing to send"
     ref = f"outcome15:{day}"
     cnt = {k: sum(1 for r in rows if r["outcome"] == k) for k in ("R1", "STOP", "TIMEOUT",
@@ -375,15 +394,23 @@ async def deliver_outcomes_15m(s, day: _dt.date) -> str:
              and r["outcome"] != "NO_FILL" and r["r_net"] is not None]
         lines.append(f"  {det}: {len(d)} filled, {sum(d):+.2f} R")
     lines.append("")
+    done = [r for r in rows if r["outcome"] != "NO_FILL"]
     lines += [f"{r['symbol'] or r['instrument_key']} {r['detector']}: {_outcome_word(r)}"
-              for r in rows[:40]]
-    if len(rows) > 40:
-        lines.append(f"... and {len(rows) - 40} more (Journal page)")
-    lines += ["", "A day of 15m outcomes is noise, not evidence of an edge.", CAVEAT_15M,
-              "", LABEL]
+              for r in done[:30]]
+    if len(done) > 30:
+        lines.append(f"... and {len(done) - 30} more (Journal page)")
+    nf = sorted({r["symbol"] or r["instrument_key"] for r in rows if r["outcome"] == "NO_FILL"})
+    if nf:
+        lines.append(f"15m entry not triggered ({cnt['NO_FILL']}): " + ", ".join(nf[:40])
+                     + (" …" if len(nf) > 40 else ""))
+    if swing_nf:
+        lines.append(f"Swing (1d) entry not triggered ({len(swing_nf)}): "
+                     + ", ".join(f"{r['symbol'] or r['instrument_key']} ({r['session_date']:%d-%m})"
+                                 for r in swing_nf[:30]) + (" …" if len(swing_nf) > 30 else ""))
+    lines += ["", "A day of outcomes is noise, not evidence of an edge.", CAVEAT_15M, "", LABEL]
     st = await deliver(s, "OUTCOME_15M", ref, "\n".join(lines))
     if st in ("sent", "logged", "dup"):
-        await _mark(s, "OUTCOME", [r["id"] for r in rows], ref)
+        await _mark(s, "OUTCOME", [r["id"] for r in rows + swing_nf], ref)
     return st
 
 

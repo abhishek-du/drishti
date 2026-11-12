@@ -461,3 +461,59 @@ def test_send_waits_out_a_429_once(monkeypatch):
         DRISHTI_TELEGRAM_CHAT_ID = "c"
     monkeypatch.setattr(notify, "get_settings", lambda: Cfg)
     assert notify.send("hello") == "sent" and len(calls) == 2 and 7.5 in slept
+
+
+def test_one_individual_15m_alert_per_stock_and_no_fill_only_in_digest(monkeypatch):
+    import datetime as dt
+    import random
+    import uuid
+    from drishti.core import db
+    sym = "VOL" + uuid.uuid4().hex[:6].upper()
+    key = f"NSE_EQ|{sym}"
+
+    async def fake_exc(s, day):
+        return {key}, set()
+    monkeypatch.setattr(notify, "individual_15m", fake_exc)
+
+    async def go():
+        try:
+            async with db.sessionmaker()() as s:
+                day = dt.date(2035, 1, 1) + dt.timedelta(days=random.randint(0, 3000))
+                rid = (await s.execute(text("""insert into run(run_id, kind, code_sha, params)
+                    values (gen_random_uuid(), 'TEST_VOL', 't', '{}') returning run_id"""))).scalar()
+                ids = []
+                for h, tf in ((4, "15m"), (5, "15m"), (4, "1d")):
+                    ids.append((await s.execute(text("""insert into scan_alert(run_id,
+                        session_date, tf, bar_time, instrument_key, symbol, detector, version,
+                        entry_ref, stop, r1, r2, rr_r1, qty, capital, risk_pct, cost_r, atr,
+                        context, created_at) values (:r, :d, :tf, :bt, :k, :sym, 'BREAKOUT_52W',
+                        'scan-v1', 100, 95, null, null, null, 2000, 1000000, 1, 0.05, 3, '{}',
+                        now() - interval '1 hour') returning id"""),
+                        {"r": rid, "d": day, "tf": tf, "k": key, "sym": sym,
+                         "bt": dt.datetime.combine(day, dt.time(h), dt.timezone.utc)})).scalar())
+                await s.commit()
+                await notify.deliver_alerts(s, "15m")
+                st = dict((await s.execute(text("""select ref, status from notify_event
+                    where kind = 'ALERT' and ref = any(:r)"""),
+                    {"r": [f"alert:{i}" for i in ids[:2]]})).all())
+                assert st == {f"alert:{ids[0]}": "logged", f"alert:{ids[1]}": "digested"}
+                # the swing alert never triggered: no individual outcome, only the EOD digest
+                await s.execute(text("""insert into journal_outcome(alert_id, run_id, basis,
+                    outcome, bars_used) values (:a, :r, 'alert', 'NO_FILL', 1)"""),
+                    {"a": ids[2], "r": rid})
+                await s.commit()
+                await notify.deliver_outcomes(s)
+                assert (await s.execute(text("""select count(*) from notify_event
+                    where kind = 'OUTCOME' and ref = :r"""), {"r": f"outcome:{ids[2]}"})).scalar() == 0
+                assert await notify.deliver_outcomes_15m(s, day) in ("logged", "dup")
+                ev = (await s.execute(text("""select status from notify_event
+                    where kind = 'OUTCOME' and ref = :r"""), {"r": f"outcome:{ids[2]}"})).scalar()
+                assert ev == "digested"
+                body = (await s.execute(text("""select text from notify_event
+                    where kind = 'OUTCOME_15M' and ref = :r"""), {"r": f"outcome15:{day}"})).scalar()
+                assert body is None or "Swing (1d) entry not triggered" in body
+        finally:
+            await db.engine().dispose()
+            db.engine.cache_clear()
+
+    asyncio.run(go())
