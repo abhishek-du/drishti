@@ -116,6 +116,7 @@ async def daily(s, ps, day: _dt.date, days: int = 450, as_of: _dt.datetime | Non
     day. Returns (bars, bar_source of day). `as_of` (default now) limits the official bars and
     the CA factors to what was knowable then (a re-run for a past day)."""
     off = await official(ps, day, days, as_of=as_of)
+    off = await fill_recent_gaps(s, off, day, as_of)
     if (off.session_date == day).sum() > 0.5 * off.instrument_key.nunique():
         return off, "official"
     prov = await provisional(s, day)
@@ -124,6 +125,45 @@ async def daily(s, ps, day: _dt.date, days: int = 450, as_of: _dt.datetime | Non
     off = off[off.session_date < day]
     return pd.concat([off, prov[off.columns]], ignore_index=True).sort_values(
         ["instrument_key", "session_date"]).reset_index(drop=True), "provisional"
+
+
+async def fill_recent_gaps(s, off: pd.DataFrame, day: _dt.date,
+                           as_of: _dt.datetime | None = None, lookback_days: int = 14
+                           ) -> pd.DataFrame:
+    """Fill a past session whose official bar is missing for a stock (Prajna's morning job
+    missed it, 2026-11-12: 11-11) with Drishti's own 15:40 provisional bar of that session, for
+    the sessions of the last `lookback_days` before `day` that have an OK EOD run (started
+    before as_of). Only (stock, session) pairs absent from the official bars are added; the
+    official bar wins as soon as it is stored. Point in time: a session's 15:40 bar is known
+    long before any later decision."""
+    if off.empty:
+        return off
+    as_of = as_of or _dt.datetime.now(tz=IST)
+    sessions = [r[0] for r in (await s.execute(text("""
+        select distinct r.session_date from run r join run_end e using (run_id)
+        where r.kind = 'P1_EOD' and e.status = 'OK' and r.session_date < :d
+          and r.session_date >= :a and r.started_at < :t order by 1"""),
+        {"d": day, "a": day - _dt.timedelta(days=lookback_days), "t": as_of})).all()]
+    if not sessions:
+        return off
+    have = set(zip(off.instrument_key, off.session_date))
+    first = off.groupby("instrument_key").session_date.min()
+    add = []
+    for sd in sessions:
+        if sd in SHORT_SESSIONS:
+            continue
+        p = await provisional(s, sd)
+        if p.empty:
+            continue
+        keep = [(k in first.index and first[k] < sd and (k, sd) not in have)
+                for k in p.instrument_key]
+        p = p[keep]
+        if not p.empty:
+            add.append(p[off.columns])
+    if not add:
+        return off
+    return pd.concat([off, *add], ignore_index=True).sort_values(
+        ["instrument_key", "session_date"]).reset_index(drop=True)
 
 
 async def provisional_range(s, key: str, after: _dt.date, before: _dt.date) -> pd.DataFrame:

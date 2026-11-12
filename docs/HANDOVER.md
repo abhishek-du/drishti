@@ -105,6 +105,11 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
 - **Only source on that chat:** V1 (auto-trade-pro) holds the same token but has no running process, cron, unit or container (its last logs are from 2026-09-21); Prajna is disabled.
 - **Prajna's own Telegram is off:** its `.env` TELEGRAM lines are commented out. To undo, remove the prefix.
 
+**Late official daily bars (2026-11-12):**
+- `bars.daily` (Scout, the EOD scan, the radar universe), the 1d chart and the analysis panel fill a past session whose Prajna official bar is missing with Drishti's own 15:40 provisional bar of that session.
+- The official bar replaces it once stored.
+- Cause on 11-12: Prajna's login failed (a stale PIN in its `.env`), so its morning 1D job for 11-11 did not run.
+
 **Known caveat (DEVIATIONS D5, 2026-11-04):**
 - Intraday (15m) scanner alerts use **unadjusted** 15m bars: Prajna's raw 15m plus the recorder's 1m.
 - For a stock with a split or bonus in the last ~25 days, its zone levels, R1/R2, stop and indicators can be wrong.

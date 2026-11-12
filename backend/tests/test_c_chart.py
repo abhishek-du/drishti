@@ -490,3 +490,52 @@ def test_provisional_range_fills_a_late_official_session():
             db.engine.cache_clear()
 
     asyncio.run(go())
+
+
+def test_daily_bars_fill_a_missing_official_session_from_the_1540_bar():
+    """bars.fill_recent_gaps (2026-11-12): a stock with history but no official bar for a past
+    session gets Drishti's provisional bar of that session; an existing official bar is kept."""
+    import asyncio
+    import datetime as dt
+    import random
+    import pandas as pd
+    from sqlalchemy import text
+    from drishti.core import db
+    from drishti.data import bars
+
+    async def go():
+        try:
+            async with db.sessionmaker()() as s:
+                d = dt.date(2034, 3, 6) + dt.timedelta(weeks=random.randint(0, 400))
+                d = d - dt.timedelta(days=d.weekday() - 2) if d.weekday() > 2 else d
+                k1, k2 = f"NSE_EQ|TFG{random.randint(0, 10**6)}", f"NSE_EQ|TFH{random.randint(0, 10**6)}"
+                rid = (await s.execute(text("""insert into run(run_id, kind, session_date, code_sha,
+                    params) values (gen_random_uuid(), 'P1_EOD', :d, 't', '{}') returning run_id"""),
+                    {"d": d})).scalar()
+                await s.execute(text("insert into run_end(run_id, status, counts) values (:r, 'OK', '{}')"),
+                                {"r": rid})
+                qt = dt.datetime.combine(d, dt.time(15, 29), dt.timezone(dt.timedelta(hours=5, minutes=30)))
+                for k, c in ((k1, 50), (k2, 70)):
+                    await s.execute(text("""insert into eod_quote(run_id, instrument_key, session_date,
+                        open, high, low, close, last_price, volume, quote_ts, fetched_at) values (:r,
+                        :k, :d, :c, :c, :c, :c, :c, 10, :qt, now())"""),
+                        {"r": rid, "k": k, "d": d, "c": c, "qt": qt})
+                await s.commit()
+                prev = d - dt.timedelta(days=1)
+                off = pd.DataFrame([
+                    {"instrument_key": k1, "session_date": prev, "open": 1, "high": 1, "low": 1,
+                     "close": 1, "volume": 1, "net": 1.0},
+                    {"instrument_key": k2, "session_date": prev, "open": 2, "high": 2, "low": 2,
+                     "close": 2, "volume": 1, "net": 1.0},
+                    {"instrument_key": k2, "session_date": d, "open": 9, "high": 9, "low": 9,
+                     "close": 9, "volume": 1, "net": 1.0}])
+                out = await bars.fill_recent_gaps(s, off, d + dt.timedelta(days=1))
+                got = {(r.instrument_key, r.session_date): r.close for r in out.itertuples()}
+                assert got[(k1, d)] == 50            # filled from the 15:40 bar
+                assert got[(k2, d)] == 9             # the official bar is kept
+                assert len(out) == 4
+        finally:
+            await db.engine().dispose()
+            db.engine.cache_clear()
+
+    asyncio.run(go())
