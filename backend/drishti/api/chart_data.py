@@ -149,6 +149,32 @@ def live_1m(key: str) -> pd.DataFrame:
                     b.get("vwap")] for b in c], "live")
 
 
+def today_ohlc(key: str, day: _dt.date, ltp: float) -> dict:
+    """Today's daily OHLC so far from the recorder (no REST call): the day's OHLC at the key's
+    first tick (day0.json, the exchange's own day values) merged with the 1m candles since then
+    (Parquet + the live snapshot) and the latest price. Falls back to the LTP alone."""
+    o = h = lo = None
+    vol = 0.0
+    try:
+        d0 = json.loads((LIVE_DIR / "day0.json").read_text()).get(key)
+    except (OSError, ValueError):
+        d0 = None
+    if d0 and d0.get("date") == str(day):
+        o, h, lo, vol = d0["open"], d0["high"], d0["low"], float(d0.get("volume") or 0)
+    m = merge(recorded_1m(key, day - _dt.timedelta(days=1)), live_1m(key))
+    if not m.empty:
+        m = m[m.session_date == day]
+    if not m.empty:
+        o = o if o is not None else float(m.open.iloc[0])
+        h = max(x for x in (h, float(m.high.max())) if x is not None)
+        lo = min(x for x in (lo, float(m.low.min())) if x is not None)
+        vol += float(m.volume.fillna(0).sum())
+    h = max(x for x in (h, ltp) if x is not None)
+    lo = min(x for x in (lo, ltp) if x is not None)
+    return {"open": o if o is not None else ltp, "high": h, "low": lo, "close": ltp,
+            "volume": vol, "from_recorder": d0 is not None or not m.empty}
+
+
 def merge(*parts: pd.DataFrame) -> pd.DataFrame:
     """Concatenate 1m (or same-timeframe) frames; on the same time the later part wins."""
     parts = [p for p in parts if not p.empty]
@@ -224,14 +250,16 @@ async def _load_1d(key: str) -> tuple[pd.DataFrame, list[dict]]:
         # Append today's live candle from real-time quote so the chart reflects today's session!
         q = get_live_quote(key)
         if q and q.get("ltp") is not None:
+            t = today_ohlc(key, day, float(q["ltp"]))
+            if not t["from_recorder"] and q.get("open"):     # a REST quote carries the day OHLC
+                t = {"open": q["open"], "high": max(q["high"] or 0, q["ltp"]),
+                     "low": min(q["low"] or q["ltp"], q["ltp"]), "close": q["ltp"],
+                     "volume": q.get("volume") or 0.0}
             live_bar = pd.DataFrame([{
                 "instrument_key": key,
                 "session_date": day,
-                "open": q.get("open") or q["ltp"],
-                "high": q.get("high") or q["ltp"],
-                "low": q.get("low") or q["ltp"],
-                "close": q["ltp"],
-                "volume": q.get("volume") or 0.0,
+                "open": t["open"], "high": t["high"], "low": t["low"], "close": t["close"],
+                "volume": t["volume"],
                 "vwap": q.get("vwap") or np.nan,
                 "src": "live_quote",
             }])

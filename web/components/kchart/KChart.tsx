@@ -316,6 +316,36 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
     return () => { close(); clearInterval(iv); };
   }, [d, load]);
 
+  // 1d / 1h / 15m: no WebSocket candles, so during market hours (Mon-Fri 09:15-15:40 IST) the
+  // bars are re-fetched every 60 s and only the newest candles are updated or appended (no reset:
+  // zoom, scroll and drawings stay). User request 2026-11-12.
+  useEffect(() => {
+    if (!d || isLive(d.tf)) return;
+    const marketOpen = () => {
+      const p = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
+      const g = (t: string) => p.find((x) => x.type === t)?.value ?? "";
+      const m = parseInt(g("hour")) * 60 + parseInt(g("minute"));
+      return !["Sat", "Sun"].includes(g("weekday")) && m >= 9 * 60 + 15 && m <= 15 * 60 + 40;
+    };
+    const iv = setInterval(async () => {
+      if (!marketOpen() || document.hidden) return;
+      try {
+        const x = await get<BarsData>(`/api/chart2/bars?${qs({ key: d.key, tf: d.tf, ha })}`);
+        const lastT = bars.current.length ? bars.current[bars.current.length - 1].timestamp : 0;
+        const fresh = x.bars.filter((b) => ts(b.time) >= lastT);
+        fresh.forEach((b) => {
+          const k: KLineData = { timestamp: ts(b.time), open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume };
+          const last = bars.current[bars.current.length - 1];
+          if (last && last.timestamp === k.timestamp) bars.current[bars.current.length - 1] = k;
+          else if (!last || k.timestamp > last.timestamp) bars.current.push(k);
+          liveCb.current?.(k);
+        });
+        if (fresh.length) { setTick((t) => t + 1); setIndTick((t) => t + 1); }
+      } catch { /* keep the chart as it is; the next minute retries */ }
+    }, 60000);
+    return () => clearInterval(iv);
+  }, [d?.key, d?.tf, ha]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // user drawings: snapshot, save, undo/redo
   const snapshot = useCallback((): Saved[] => (chart.current?.getOverlays({ groupId: USER }) ?? [])
     .filter((o) => o.points.length >= o.totalStep - 1)

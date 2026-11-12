@@ -389,3 +389,26 @@ def test_pattern_layers_wording(client):
         src = f.read_text()
         assert not re.search(r"\b(BUY|SELL)\b", src), f.name
     assert "the only actionable layer is the alert levels" in (kc / "KChart.tsx").read_text()
+
+
+def test_today_1d_bar_uses_the_recorder_day_ohlc(tmp_path, monkeypatch):
+    """Before 15:40 the 1d chart's today bar is built from day0.json + the 1m candles + the
+    LTP (user 2026-11-12: it was a flat LTP-only candle)."""
+    import datetime as dt
+    import json
+    from urllib.parse import quote
+    from drishti.api import chart_data as c
+    day, key = dt.date(2026, 11, 12), "NSE_EQ|TOHLC"
+    monkeypatch.setattr(c, "LIVE_DIR", tmp_path)
+    monkeypatch.setattr(c, "bars_1m_dir", lambda: tmp_path / "none")
+    (tmp_path / "c1m").mkdir()
+    (tmp_path / "day0.json").write_text(json.dumps({key: {
+        "date": str(day), "open": 100.0, "high": 104.0, "low": 99.0, "close": 101.0,
+        "volume": 1000, "seen_at": 0}}))
+    t0 = int(dt.datetime(2026, 11, 12, 9, 30, tzinfo=dt.timezone.utc).timestamp())
+    (tmp_path / "c1m" / f"{quote(key, safe='')}.json").write_text(json.dumps([
+        {"time": t0, "open": 101, "high": 102, "low": 97.5, "close": 98, "volume": 50}]))
+    t = c.today_ohlc(key, day, 98.5)
+    assert (t["open"], t["high"], t["low"], t["close"]) == (100.0, 104.0, 97.5, 98.5)
+    assert t["volume"] == 1050 and t["from_recorder"]
+    assert c.today_ohlc("NSE_EQ|NONE", day, 50.0)["from_recorder"] is False
