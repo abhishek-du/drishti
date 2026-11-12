@@ -92,9 +92,11 @@ async def verify(target: str, out: Path, n: int, months: list[str] | None,
 HISTORY_SQL = """
 create schema if not exists history;
 create table if not exists history.cutover (d date not null);
+-- the cutover is always the copy's last session (or --cutover): after the switch-night delta
+-- copy it moves to S, so a session is never in both the copy and Drishti's own bars
+delete from history.cutover;
 insert into history.cutover(d) select coalesce(cast(:cut as date),
-    (select max(session_date) from prajna_copy.ohlcv_bar_1d))
-  where not exists (select 1 from history.cutover);
+    (select max(session_date) from prajna_copy.ohlcv_bar_1d));
 create or replace view history.ohlcv_bar as
   select * from prajna_copy.ohlcv_bar_1d
   union all

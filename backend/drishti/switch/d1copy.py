@@ -129,7 +129,9 @@ def copy_table(target: str, t: str, prajna_where: str = "", name: str | None = N
     sql(target, f"drop table if exists {SCHEMA}.{new}; {ddl(t, new)};", False)
     pipe(f"copy (select * from public.{t} {prajna_where}) to stdout (format binary)",
          target, f"copy {SCHEMA}.{new} from stdin (format binary)")
-    sql(target, f"""begin; drop table if exists {SCHEMA}.{name};
+    # cascade: the prajna_copy / history views over this table go too; copy() rebuilds them
+    # at the end of the run (found in the 2026-11-12 switch rehearsal: a delta copy failed)
+    sql(target, f"""begin; drop table if exists {SCHEMA}.{name} cascade;
         alter table {SCHEMA}.{new} rename to {name};
         grant select on {SCHEMA}.{name} to {APP_ROLE}; commit;""", False)
     return table_check(target, SCHEMA, name)
@@ -346,8 +348,11 @@ def copy(target: str, out: Path, tfs: list[str], months: list[str] | None,
                            "written": sum(counts.values()), "mismatch": bad,
                            "bytes": sum(f.stat().st_size for f in (out / tf).rglob("*.parquet"))}
         rep["ok"] &= not bad
-    if "1d" in tfs:
+    if sql(target, f"select to_regclass('{SCHEMA}.ohlcv_bar_1d') is not null", False)[0][0] == "t":
         rep["views"] = make_views(target)
+        if sql(target, "select to_regclass('history.cutover') is not null", False)[0][0] == "t":
+            from drishti.switch import repoint            # re-point step 3 views, if built
+            rep["history"] = repoint.make_history_views(target)
     state["runs"].append({"w": w, "stamp": stamp, "delta": delta, "tfs": tfs,
                           "months": months, "ok": rep["ok"]})
     state_f.write_text(json.dumps(state, indent=1))

@@ -1,0 +1,47 @@
+# Drishti cron AFTER THE SWITCH (2026-11-20; SWITCH_CHECKLIST step G). The user replaces the
+# Drishti block of the crontab with this file. Changes vs cron.txt (pre-switch):
+#   + 06:10 login (Drishti owns the Upstox account; guarded, once a day; the token expires ~03:30)
+#   ~ daily1d moves 22:40 -> 06:30 Tue-Sat (the official bar of the previous session, after login)
+#   - compare1d (Prajna has stopped: nothing to compare with)
+#   ~ intraday second pass 04:30 -> 07:00 (after login; the 01:00 run still has the evening token)
+# Decision A (historical API only 22:00-05:30) ends with DRISHTI_UPSTOX_LOGIN_ENABLED=true.
+10 6 * * *     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh login
+40 15 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh eod
+15 22 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh indices
+30 7 * * 1     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh holidays
+0 20 * * *     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh manual
+# provisional vs official bar of the previous session (Prajna's 1d fetch ends ~08:30); first 5 sessions at least
+30 9 * * 2-6   /home/cis/windows/drishti/ops/runbooks/drishti_job.sh barcheck
+# Scout watchlist of today (P2), after the 15:40 provisional snapshot
+30 19 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scout
+# Drishti instrument master (P1c; Upstox public file, no API budget, no token)
+20 6 * * *     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh master
+# Official 1d of the previous session (own budget after the switch)
+30 6 * * 2-6   /home/cis/windows/drishti/ops/runbooks/drishti_job.sh daily1d
+# Live recorder (LIVE VIEW + ticks; not used by drishti-swing-v1): every 5 min in market hours,
+# skipped silently while running or outside 09:21-15:35 (09:15 after the switch)
+*/5 9-15 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh live
+# Corporate actions (P1c): every night, all ~3,580 equity ISINs (fundamentals API, own budget,
+# fraction 0.3, ~3 h) + factor derivation + continuity check vs Prajna. The vendor serves only
+# ~1 year of history, so a missed night is caught up the next night.
+0 23 * * *     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh ca
+# Upstox news (P1c, D2): every 30 min 08:00-22:30, every day (~120 requests, ~1.5 min, fraction 0.2).
+# The vendor keeps only the newest articles per stock (busy names drop out before 7 days), so
+# frequent polling is what keeps coverage complete.
+*/30 8-22 * * *  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh news
+# Decision-support scanner (user 2026-11-03; NOT validated edges, PAPER ONLY, separate from v1):
+# EOD scan of the eligible top 500 after Scout; 15m scan of the watchlist on each closed bar
+# (09:31-15:31; runs outside 09:30-15:35 or on holidays skip silently); grading every morning
+# after Prajna's official 1d of T-1 lands (moves after daily1d at the switch).
+45 19 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scan_eod
+1,16,31,46 9-15 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scan_intraday
+45 9 * * 2-6   /home/cis/windows/drishti/ops/runbooks/drishti_job.sh scan_grade
+# Nightly intraday (P1c, D3): 1m/15m/1h of the previous session for the top 500 + 21 indices
+# (~1,570 historical requests at fraction 0.5, after daily1d; files only, ~2 MB/night) + overlap check vs Prajna
+0 1 * * 2-6    /home/cis/windows/drishti/ops/runbooks/drishti_job.sh intraday
+# second pass: Upstox fills the previous session's intraday history over the night (11-04 01:00:
+# 1m for only 18 of 524 keys), so 04:30 re-fetches only the keys still empty; stops at 05:30 (decision A)
+0 7 * * 2-6    /home/cis/windows/drishti/ops/runbooks/drishti_job.sh intraday --missing
+# Time Machine odds (research/simulation, NOT a signal; Track B engine) for the day's 1d scanner
+# alerts -> odds_result; bars as known at each alert's 19:45 scan (reproducible). ~3 s.
+15 20 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh odds

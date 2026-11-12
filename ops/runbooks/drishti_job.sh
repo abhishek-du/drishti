@@ -2,9 +2,11 @@
 # Drishti job wrapper for cron: one job at a time per name, a log line at start and end.
 #   ops/runbooks/drishti_job.sh holidays|indices|manual|eod|barcheck|scout|master|daily1d|compare1d|intraday|live
 #   ops/runbooks/drishti_job.sh scan_eod|scan_intraday|scan_grade|odds   (decision-support scanner)
+#   ops/runbooks/drishti_job.sh login   (after the switch only: guarded, once a day, never prints the token)
 # live: started every 5 min in market hours; a running recorder or a run outside its window
 # (09:21/09:15-15:35) is skipped silently, so cron restarts it within 5 min after a crash.
-# PAPER ONLY. Read-only market data. Drishti never logs in to Upstox (decision A).
+# PAPER ONLY. Read-only market data. Before the switch Drishti never logs in (decision A); the
+# login job refuses until DRISHTI_UPSTOX_LOGIN_ENABLED=true (set at the 2026-11-20 switch).
 set -uo pipefail
 JOB="${1:?job}"
 shift; ARGS=("$@")                        # extra args go to the job (e.g. intraday --missing)
@@ -25,6 +27,7 @@ fi
 OUT="var/logs/${JOB}_$(TZ=Asia/Kolkata date +%F_%H%M).json"
 case "$JOB" in scout) MOD=drishti.run.p2 ;; status) MOD=drishti.run.status ;;
   scan_*) MOD=drishti.scanner.run ;; odds) MOD=drishti.scanner.odds_job ;;
+  login) MOD=drishti.broker.upstox.login ;;
   *) MOD=drishti.run.p1 ;; esac
 if [ "$JOB" = scan_intraday ]; then          # every 15 min: log only real runs
   .venv/bin/python -m "$MOD" "$JOB" > "$OUT" 2>&1; rc=$?
