@@ -43,6 +43,14 @@ MAX_PER_RUN = 25
 # scan only covers watchlist + radar names, so every 15m alert would qualify.
 WATCHLIST_TOP_INDIVIDUAL = 10
 GAP_S = 1.1
+MAX_ATTEMPTS = 3
+RETRY_WINDOW = "2 hours"      # a failed message is retried only while it is still current
+STUCK_PENDING = "10 minutes"  # a claim whose run died before the send is retried after this
+# an event that a later run may (re)send: none yet, or failed / stuck within the retry window
+RETRYABLE = f"""(n.status = 'failed' and n.attempts < {MAX_ATTEMPTS}
+                 and n.created_at > now() - interval '{RETRY_WINDOW}')
+             or (n.status = 'pending' and n.created_at < now() - interval '{STUCK_PENDING}'
+                 and n.created_at > now() - interval '{RETRY_WINDOW}')"""
 CAVEAT_15M = ("15m levels use unadjusted 15m bars (DEVIATIONS D5): unreliable for a stock "
               "with a split/bonus in the last ~25 days, until the 11-20 switch work adjusts them.")
 
@@ -58,12 +66,24 @@ def send(msg: str) -> str:
     wait = _state["last"] + GAP_S - time.monotonic()
     if wait > 0:
         time.sleep(wait)
+    url = f"https://api.telegram.org/bot{cfg.DRISHTI_TELEGRAM_BOT_TOKEN}/sendMessage"
+    body = {"chat_id": cfg.DRISHTI_TELEGRAM_CHAT_ID, "text": msg[:4000],
+            "disable_web_page_preview": True}
     try:
-        r = httpx.post(f"https://api.telegram.org/bot{cfg.DRISHTI_TELEGRAM_BOT_TOKEN}/sendMessage",
-                       json={"chat_id": cfg.DRISHTI_TELEGRAM_CHAT_ID, "text": msg[:4000],
-                             "disable_web_page_preview": True}, timeout=20)
-        _state["last"] = time.monotonic()
-        return "sent" if r.status_code == 200 else f"failed HTTP {r.status_code}"
+        for attempt in (1, 2):
+            r = httpx.post(url, json=body, timeout=20)
+            _state["last"] = time.monotonic()
+            if r.status_code == 200:
+                return "sent"
+            if r.status_code == 429 and attempt == 1:  # flood control: wait as told, once
+                try:
+                    wait_s = float((r.json().get("parameters") or {}).get("retry_after") or 5)
+                except ValueError:
+                    wait_s = 5.0
+                time.sleep(min(wait_s, 30.0) + 0.5)
+                continue
+            return f"failed HTTP {r.status_code}"
+        return "failed HTTP 429"
     except httpx.HTTPError as e:                  # never echo the URL (it holds the token)
         _state["last"] = time.monotonic()
         return f"failed {type(e).__name__}"
@@ -75,11 +95,13 @@ async def deliver(s, kind: str, ref: str, body: str) -> str:
         on conflict (kind, ref) do nothing returning id"""), {"k": kind, "r": ref, "t": body})
     ).first()
     if row is None:
-        old = (await s.execute(text("""select id, status, attempts from notify_event
-            where kind = :k and ref = :r"""), {"k": kind, "r": ref})).first()
-        if old is None or old.status != "failed" or old.attempts >= 3:
-            return "dup"
+        old = (await s.execute(text(f"""select n.id from notify_event n
+            where n.kind = :k and n.ref = :r and ({RETRYABLE})"""), {"k": kind, "r": ref})).first()
+        if old is None:
+            return "dup"                              # sent / logged / digested, or given up
         row = old
+        await s.execute(text("""update notify_event set text = :t, status = 'pending'
+            where id = :i"""), {"t": body, "i": row.id})
     await s.commit()
     if _state["sent"] >= MAX_PER_RUN:
         await s.execute(text("update notify_event set status = 'batched' where id = :i"),
@@ -231,13 +253,13 @@ async def deliver_alerts(s, tf: str | None = None, odds_wait_min: int = 40) -> d
     """Every alert from NOTIFY_SINCE without an ALERT event. 1d: one message each (a 1d alert
     waits up to `odds_wait_min` for its odds; scan_eod scores them right after the scan). 15m:
     exceptions one each, the rest one DIGEST_15M per bar."""
-    rows = [dict(r) for r in (await s.execute(text("""
+    rows = [dict(r) for r in (await s.execute(text(f"""
         select a.*, ol.mc_target_first, ol.mc_avg_r_net, ol.breakeven, ol.thin_sample,
                ol.verdict
         from scan_alert a left join odds_latest ol on ol.alert_id = a.id and ol.basis = 'alert'
         where a.session_date >= :since and (cast(:tf as text) is null or a.tf = :tf)
           and not exists (select 1 from notify_event n where n.kind = 'ALERT'
-                          and n.ref = 'alert:' || a.id)
+                          and n.ref = 'alert:' || a.id and not ({RETRYABLE}))
         order by a.bar_time, a.id"""), {"since": NOTIFY_SINCE, "tf": tf})).mappings()]
     out: dict = {}
     now_ = _dt.datetime.now(_dt.timezone.utc)
@@ -280,7 +302,7 @@ def _outcome_word(r: dict) -> str:
             "TIMEOUT": f"expired {_f(r['r_net'])} R"}.get(k, "entry not triggered")
 
 
-_OUTCOME_SQL = """
+_OUTCOME_SQL = f"""
     with l as (select distinct on (alert_id, basis) * from journal_outcome
                order by alert_id, basis, graded_at desc, id desc)
     select a.*, j.status as jstatus, j.actual_entry,
@@ -291,7 +313,7 @@ _OUTCOME_SQL = """
     left join journal_entry j on j.alert_id = a.id
     where a.session_date >= :since and o.outcome in ('R1', 'STOP', 'TIMEOUT', 'NO_FILL')
       and not exists (select 1 from notify_event n where n.kind = 'OUTCOME'
-                      and n.ref = 'outcome:' || a.id)"""
+                          and n.ref = 'outcome:' || a.id and not ({RETRYABLE}))"""
 
 
 async def deliver_outcomes(s) -> dict:
@@ -399,9 +421,9 @@ async def deliver_radar(s, day: _dt.date) -> dict:
     from drishti.scanner.radar import CAVEAT, LABEL as RL
     if day < NOTIFY_SINCE:
         return {}
-    rows = (await s.execute(text("""select r.* from radar_event r where r.session_date = :d
+    rows = (await s.execute(text(f"""select r.* from radar_event r where r.session_date = :d
         and not exists (select 1 from notify_event n where n.kind = 'RADAR_NEW'
-                        and n.ref = 'radar:' || r.id) order by r.bar_time, r.id"""),
+                          and n.ref = 'radar:' || r.id and not ({RETRYABLE})) order by r.bar_time, r.id"""),
         {"d": day})).mappings().all()
     out: dict = {}
     for r in rows:

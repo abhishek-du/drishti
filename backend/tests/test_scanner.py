@@ -382,3 +382,82 @@ def test_15m_alerts_and_outcomes_go_out_as_digests_once():
             db.engine.cache_clear()
 
     asyncio.run(go())
+
+
+def test_failed_telegram_sends_are_retried_then_given_up(monkeypatch):
+    import datetime as dt
+    import random
+    from drishti.core import db
+    import uuid
+    results, sym = [], "RTY" + uuid.uuid4().hex[:8].upper()
+    # only this run's messages consume the scripted results; others in drishti_test are logged
+    monkeypatch.setattr(notify, "send", lambda msg: results.pop(0)
+                        if (sym in msg or msg == "x") else "logged")
+
+    async def go():
+        try:
+            async with db.sessionmaker()() as s:
+                day = dt.date(2032, 1, 1) + dt.timedelta(days=random.randint(0, 3000))
+                rid = (await s.execute(text("""insert into run(run_id, kind, code_sha, params)
+                    values (gen_random_uuid(), 'TEST_RETRY', 't', '{}') returning run_id"""))).scalar()
+                aid = (await s.execute(text("""insert into scan_alert(run_id, session_date, tf,
+                    bar_time, instrument_key, symbol, detector, version, entry_ref, stop, r1, r2,
+                    rr_r1, qty, capital, risk_pct, cost_r, atr, context, created_at) values (:r,
+                    :d, '1d', :bt, 'NSE_EQ|TRETRY', :sym, 'BREAKOUT_52W', 'scan-v1', 100, 95,
+                    null, null, null, 2000, 1000000, 1, 0.05, 3, '{}', now() - interval '1 hour')
+                    returning id"""), {"r": rid, "d": day, "sym": sym,
+                                       "bt": dt.datetime.combine(day, dt.time(10), dt.timezone.utc)})
+                ).scalar()
+                await s.commit()
+                mine = lambda: s.execute(text("""select status, attempts from notify_event
+                    where kind = 'ALERT' and ref = :r"""), {"r": f"alert:{aid}"})  # noqa: E731
+                results[:] = ["failed HTTP 429"]
+                await notify.deliver_alerts(s, "1d")
+                assert tuple((await mine()).one()) == ("failed", 1)
+                results[:] = ["sent"]
+                await notify.deliver_alerts(s, "1d")              # the next run retries it
+                assert tuple((await mine()).one()) == ("sent", 2)
+                results[:] = ["sent"]
+                await notify.deliver_alerts(s, "1d")              # never twice once sent
+                assert results == ["sent"]
+                # given up after MAX_ATTEMPTS, and never for an event older than the window
+                ref = f"test:retry:{aid}"
+                for _ in range(notify.MAX_ATTEMPTS):
+                    results[:] = ["failed ConnectError"]
+                    assert await notify.deliver(s, "SUMMARY", ref, "x") == "failed"
+                results[:] = ["sent"]
+                assert await notify.deliver(s, "SUMMARY", ref, "x") == "dup"
+                old = f"test:old:{aid}"
+                results[:] = ["failed ConnectError"]
+                await notify.deliver(s, "SUMMARY", old, "x")
+                await s.execute(text("""update notify_event set created_at = now() - interval '3 hours'
+                    where ref = :r"""), {"r": old})
+                await s.commit()
+                results[:] = ["sent"]
+                assert await notify.deliver(s, "SUMMARY", old, "x") == "dup"
+        finally:
+            await db.engine().dispose()
+            db.engine.cache_clear()
+
+    asyncio.run(go())
+
+
+def test_send_waits_out_a_429_once(monkeypatch):
+    calls, slept = [], []
+
+    class R:
+        def __init__(self, code, body):
+            self.status_code, self._b = code, body
+
+        def json(self):
+            return self._b
+
+    seq = [R(429, {"ok": False, "parameters": {"retry_after": 7}}), R(200, {"ok": True})]
+    monkeypatch.setattr(notify.httpx, "post", lambda *a, **k: calls.append(1) or seq.pop(0))
+    monkeypatch.setattr(notify.time, "sleep", lambda x: slept.append(x))
+
+    class Cfg:
+        DRISHTI_TELEGRAM_BOT_TOKEN = "t"
+        DRISHTI_TELEGRAM_CHAT_ID = "c"
+    monkeypatch.setattr(notify, "get_settings", lambda: Cfg)
+    assert notify.send("hello") == "sent" and len(calls) == 2 and 7.5 in slept
