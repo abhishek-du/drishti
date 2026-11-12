@@ -26,7 +26,7 @@ def fetch_quote(key: str) -> dict | None:
                     uc = item.get("upper_circuit_limit")
                     lc = item.get("lower_circuit_limit")
                     nc = item.get("net_change") or 0.0
-                    prev_c = ohlc.get("close") or (ltp - nc)
+                    prev_c = ltp - nc       # ohlc.close is today's close, not the previous one
                     pct = round((nc / prev_c * 100), 2) if prev_c else 0.0
                     info = {
                         "ltp": float(ltp),

@@ -131,3 +131,24 @@ The user accepted in writing that **there is no full backup of the `prajna` data
 - It is used by the chart's 15m/1h/1m history and the scanner's `bars15`.
 - Checked on a 1:2 split (ex 2026-11-04): the raw/adjusted ratio is exactly 2.0 before the ex-date and 1.0 after it.
 - Today's recorder bars need no adjustment.
+
+## D8 (2026-11-12): the provisional bar is the official close (a 16:10 snapshot), not the 15:40 last trade
+
+**Spec text:** "provisional: the Upstox quote OHLC at 15:40 IST" (SPEC_drishti-swing-v1).
+
+**Finding:** the user saw UNIMECH at 1985.90 on Drishti against an actual 1980.60.
+- NSE's official close is the weighted price of the last 30 minutes. It is published after the close; trades in the closing session happen at it until 16:00.
+- At 15:40 the Upstox quote still carries the last trade.
+- Measured on 2026-11-12, against a re-quote at ~20:10, for 3,460 stocks: 1,049 differed (809 by more than 0.1 %, 229 by more than 0.5 %, 66 by more than 1 %).
+- For 11-11, the 15:40 snapshot equalled the official close for only 740 of 3,409 stocks, while Upstox's `cp` (prev close) equals Prajna's official close for 3,409 of 3,409.
+- After the close, the quote's `last_price` and `ohlc.close` are equal for every stock: both are the official close.
+
+**Change:**
+- A second EOD snapshot runs at 16:10 (cron).
+- Every reader of the EOD snapshot uses the **newest** OK snapshot of the session that started before its `as_of`: the provisional bars, Scout, the scanner, the bar check, radar bands and the paper mark.
+- After 15:35, the stock page price and today's live 1d candle use the REST quote (the official close) instead of the recorder's last tick.
+- `live_quote` computed % change against today's close; it now uses the previous close (ltp − net_change).
+
+**Effect:** the signals of T are computed at 19:30/19:45 from the official close, as the official bar the next morning will have it. This reduces BAR_REVISED cases. The 15:40 snapshot is still taken and kept.
+
+**Not changed:** the rules (scout-b-v1, scan-v1, drishti-swing-v1 logic, pf-v1). The decisions already recorded for 11-12 (Scout 19:30, scan 19:45, made from the 15:40 snapshot) stay as recorded.

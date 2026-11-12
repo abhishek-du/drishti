@@ -1,7 +1,8 @@
 """Provisional vs official daily bar of T (spec section 1, user check 2026-10-29: daily for the
 first 5 sessions).
 
-- provisional: Drishti's 15:40 quote snapshot (eod_quote, the first OK P1_EOD run of T; only
+- provisional: Drishti's EOD quote snapshot (eod_quote, the newest OK P1_EOD run of T: 16:10
+  after NSE's official close from 2026-11-12, else 15:40; only
   quotes whose last trade is on T);
 - official: Upstox historical 1d of T as Prajna stores it (ohlcv_bar, read only, latest fetch).
 
@@ -36,7 +37,7 @@ async def provisional(s, day: _dt.date) -> pd.DataFrame:
     rows = (await s.execute(text("""
         with r as (select r.run_id from run r join run_end e using (run_id)
                    where r.kind = 'P1_EOD' and r.session_date = :d and e.status = 'OK'
-                   order by r.started_at limit 1)
+                   order by r.started_at desc limit 1)
         select instrument_key, open, high, low, close, last_price, volume from eod_quote
         where run_id = (select run_id from r) and session_date = :d
           and (quote_ts at time zone 'Asia/Kolkata')::date = :d"""), {"d": day})).mappings().all()

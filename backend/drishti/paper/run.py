@@ -31,7 +31,7 @@ async def latest_prices(s, keys: list[str]) -> dict[str, tuple[float, _dt.dateti
     q = dict((k, (float(p), t)) for k, p, t in (await s.execute(text("""
         with r as (select r.run_id from run r join run_end e using (run_id)
                    where r.kind = 'P1_EOD' and e.status = 'OK'
-                   order by r.session_date desc, r.started_at limit 1)
+                   order by r.session_date desc, r.started_at desc limit 1)
         select instrument_key, last_price, quote_ts from eod_quote
         where run_id = (select run_id from r) and instrument_key = any(:k)
           and last_price is not null"""), {"k": keys})).all())

@@ -192,15 +192,19 @@ async def intraday(ps, keys: list[str], tf: str, since: _dt.date,
         ["instrument_key", "t"]).reset_index(drop=True)
 
 
-async def provisional(s, day: _dt.date) -> pd.DataFrame:
-    """Drishti's provisional bars of `day` (first OK EOD run; quotes that traded on `day`)."""
+async def provisional(s, day: _dt.date, as_of: _dt.datetime | None = None) -> pd.DataFrame:
+    """Drishti's provisional bars of `day` (the newest OK EOD snapshot of `day`: from 2026-11-12
+    the 16:10 one, after NSE's official close, else the 15:40 one; quotes that traded on `day`).
+    `as_of`: only snapshots started before it (a re-run must not use a later snapshot)."""
     rows = (await s.execute(text("""
         with r as (select r.run_id from run r join run_end e using (run_id)
                    where r.kind = 'P1_EOD' and r.session_date = :d and e.status = 'OK'
-                   order by r.started_at limit 1)
+                     and r.started_at < :t
+                   order by r.started_at desc limit 1)
         select instrument_key, open, high, low, close, volume from eod_quote
         where run_id = (select run_id from r)
-          and (quote_ts at time zone 'Asia/Kolkata')::date = :d"""), {"d": day})).all()
+          and (quote_ts at time zone 'Asia/Kolkata')::date = :d"""),
+        {"d": day, "t": as_of or _dt.datetime.now(tz=IST)})).all()
     df = pd.DataFrame(rows, columns=["instrument_key", *COLS])
     for c in COLS:
         df[c] = df[c].astype(float)
@@ -218,7 +222,7 @@ async def daily(s, ps, day: _dt.date, days: int = 450, as_of: _dt.datetime | Non
     off = await fill_recent_gaps(s, off, day, as_of)
     if (off.session_date == day).sum() > 0.5 * off.instrument_key.nunique():
         return off, "official"
-    prov = await provisional(s, day)
+    prov = await provisional(s, day, as_of)
     if prov.empty:
         raise RuntimeError(f"no official or provisional bars for {day}")
     off = off[off.session_date < day]
@@ -230,7 +234,7 @@ async def fill_recent_gaps(s, off: pd.DataFrame, day: _dt.date,
                            as_of: _dt.datetime | None = None, lookback_days: int = 14
                            ) -> pd.DataFrame:
     """Fill a past session whose official bar is missing for a stock (Prajna's morning job
-    missed it, 2026-11-12: 11-11) with Drishti's own 15:40 provisional bar of that session, for
+    missed it, 2026-11-12: 11-11) with Drishti's own provisional bar of that session (its newest EOD snapshot), for
     the sessions of the last `lookback_days` before `day` that have an OK EOD run (started
     before as_of). Only (stock, session) pairs absent from the official bars are added; the
     official bar wins as soon as it is stored. Point in time: a session's 15:40 bar is known
@@ -251,7 +255,7 @@ async def fill_recent_gaps(s, off: pd.DataFrame, day: _dt.date,
     for sd in sessions:
         if sd in SHORT_SESSIONS:
             continue
-        p = await provisional(s, sd)
+        p = await provisional(s, sd, as_of)
         if p.empty:
             continue
         keep = [(k in first.index and first[k] < sd and (k, sd) not in have)
@@ -274,7 +278,7 @@ async def provisional_range(s, key: str, after: _dt.date, before: _dt.date) -> p
         with r as (select distinct on (r.session_date) r.run_id, r.session_date from run r
                    join run_end e using (run_id) where r.kind = 'P1_EOD' and e.status = 'OK'
                    and r.session_date > :a and r.session_date < :b
-                   order by r.session_date, r.started_at)
+                   order by r.session_date, r.started_at desc)
         select q.session_date, q.open, q.high, q.low, q.close, q.volume from eod_quote q
         join r using (run_id) where q.instrument_key = :k
           and (q.quote_ts at time zone 'Asia/Kolkata')::date = q.session_date"""),

@@ -1,6 +1,9 @@
 # Drishti cron (user installs: (crontab -l; cat /home/cis/windows/drishti/ops/cron.txt) | crontab - )
 # Upstox historical-candle API only 22:00-05:30 (shared account, decision A).
 40 15 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh eod
+# second EOD snapshot after NSE's official close (2026-11-12: the 15:40 last trade differed from
+# the official close for 1,049 of 3,460 stocks); readers use the newest snapshot of the session
+10 16 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh eod
 15 22 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh indices
 30 7 * * 1     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh holidays
 0 20 * * *     /home/cis/windows/drishti/ops/runbooks/drishti_job.sh manual

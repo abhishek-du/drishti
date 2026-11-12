@@ -40,14 +40,25 @@ _cache: dict[tuple[str, str], tuple[float, tuple[pd.DataFrame, list[dict]]]] = {
 _quote_cache: dict[str, tuple[float, dict]] = {}
 
 
+def _market_open(t: _dt.datetime | None = None) -> bool:
+    t = (t or _dt.datetime.now(tz=IST)).astimezone(IST)
+    m = t.hour * 60 + t.minute
+    return t.weekday() < 5 and 9 * 60 + 15 <= m < 15 * 60 + 35
+
+
 def get_live_quote(key: str) -> dict | None:
     now_t = time.monotonic()
     hit = _quote_cache.get(key)
-    if hit and now_t - hit[0] < 10.0:
+    if hit and now_t - hit[0] < (10.0 if _market_open() else 60.0):
         return hit[1]
 
-    # 1. Check summary.json
+    # 1. Check summary.json: the recorder's live ticks, only while the market is open. After
+    # 15:35 the recorder has stopped at its last tick, but NSE's official close (the weighted
+    # last-30-minutes price) comes later; the REST quote carries it (2026-11-12: UNIMECH last
+    # tick 1985.90, official close 1980.60; 1,049 of 3,460 stocks differed).
     try:
+        if not _market_open():
+            raise LookupError("market closed: use the REST quote")
         sum_file = LIVE_DIR / "summary.json"
         if sum_file.exists():
             s = json.loads(sum_file.read_text())

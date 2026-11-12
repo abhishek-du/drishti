@@ -57,7 +57,7 @@ async def scout(s, ps, day: _dt.date) -> dict:
     q = (await s.execute(text("""
         with r as (select r.run_id from run r join run_end e using (run_id)
                    where r.kind = 'P1_EOD' and r.session_date = :d and e.status = 'OK'
-                   order by r.started_at limit 1)
+                   order by r.started_at desc limit 1)
         select instrument_key, upper_circuit, lower_circuit, last_price, net_change
         from eod_quote where run_id = (select run_id from r)"""), {"d": day})).all()
     fo = {k for k, a in (await master.state(s)).items() if a.get("fo")}

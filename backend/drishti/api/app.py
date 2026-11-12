@@ -208,10 +208,14 @@ def _live_candles(key: str, tf: int) -> list[dict]:
     if tf == 1440:                        # today's daily candle: day OHLC incl. pre-recorder part
         if not c1:
             return []
-        from drishti.api.chart_data import today_ohlc
+        from drishti.api.chart_data import _market_open, get_live_quote, today_ohlc
         t0 = _bucket(c1[-1]["time"], 1440)
         day = _dt.datetime.fromtimestamp(t0 + 19800, _dt.timezone.utc).date()
-        o = today_ohlc(key, day, float(c1[-1]["close"]))
+        px = float(c1[-1]["close"])
+        if not _market_open():               # after 15:35: NSE's official close, not the last tick
+            q = get_live_quote(key)
+            px = float(q["ltp"]) if q and q.get("ltp") is not None else px
+        o = today_ohlc(key, day, px)
         return [{"time": t0, "open": o["open"], "high": o["high"], "low": o["low"],
                  "close": o["close"], "volume": o["volume"], "vwap": c1[-1].get("vwap")}]
     out: dict[int, dict] = {}
