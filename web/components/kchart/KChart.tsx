@@ -2,6 +2,7 @@
 // TradingView-style chart on KLineChart v10 (Apache 2.0). Bars, indicator values, candle flags,
 // zones and the trend all come from the read-only API (drishti.features); this file only draws.
 // Drawings are kept per stock and timeframe in this browser's localStorage (no DB writes).
+import { ALERT_GROUP, alertOverlays, ts, type AlertLevels, type ZonesAsOf } from "./alertLayers";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Chart, dispose, Indicator, init, KLineData, Overlay, OverlayCreate } from "klinecharts";
 import { fmt, get } from "../api";
@@ -23,6 +24,7 @@ export type BarsData = {
           dir: "bull" | "bear" | "flat"; confirm: string | null; follow: string | null }[];
   lines: Record<string, Pt[]>; panes: Record<string, Pt[]>;
   candles: { time: string | number; flags: string[] }[]; bullish_flags: string[]; bearish_flags?: string[];
+  zones_as_of?: ZonesAsOf;
   markers?: { label: string; note: string; items: { time: string | number; kind: "bull" | "bear" | "caution"; flags: string[]; stop: number | null }[] };
   zones: { price: number; bottom: number; top: number; touches: number }[];
   trend: "UP" | "DOWN" | "SIDE";
@@ -37,7 +39,7 @@ type Scale = "normal" | "logarithm" | "percentage";
 type Layers = { zones: boolean; patterns: "bullish" | "all" | "off"; trend: boolean; signals: boolean };
 type Magnet = "normal" | "weak_magnet" | "strong_magnet";
 
-export const ts = (t: string | number) => (typeof t === "number" ? t * 1000 : Date.parse(`${t}T00:00:00+05:30`));
+export { ts };
 const STOP_BARS = 10;
 const LEGEND = "▲ = detected candlestick pattern (context only, not a signal, no validated edge); the only actionable layer is the alert levels.";   // a pattern marker's stop line runs this many bars to the right
 const LS = { ind: "drishti.chart.ind.v1", ctype: "drishti.chart.ctype", scale: "drishti.chart.scale", layers: "drishti.chart.layers.v2", theme: "drishti.theme.v1", magnet: "drishti.chart.magnet" };
@@ -46,10 +48,7 @@ function lsSet(k: string, v: unknown) { try { localStorage.setItem(k, JSON.strin
 const qs = (o: Record<string, string | number | boolean>) => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&");
 
 /** Scanner alert levels drawn on the chart (entry blue, stop red, R1/R2 green dashed, marker on bar_time). */
-/** A zone as the alert saw it (scan_alert.context.zones_used): pivot dates first / last, and the
- * date the last pivot was confirmed (5 bars later). */
-export type SavedZone = { name: string; bottom: number; top: number; touches?: number; first?: string; last?: string; confirmed?: string };
-export type AlertLevels = { entry: number; stop: number; r1: number | null; r2: number | null; barTime: string; tf: "1d" | "15m"; zones: SavedZone[] };
+export type { AlertLevels, SavedZone } from "./alertLayers";
 
 export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
   instrumentKey: string; tf: Tf; setTf: (t: Tf) => void; onData: (d: BarsData | null) => void; levels?: AlertLevels;
@@ -166,13 +165,14 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
 
   // bars for (key, tf, Heikin Ashi)
   const ha = ctype === "ha";
+  const asOf = levels?.barTime;
   const load = useCallback(async () => {
     try {
-      const x = await get<BarsData>(`/api/chart2/bars?${qs({ key: instrumentKey, tf, ha })}`);
+      const x = await get<BarsData>(`/api/chart2/bars?${qs({ key: instrumentKey, tf, ha, ...(asOf ? { as_of: asOf } : {}) })}`);
       setD(x); setErr(""); onData(x);
       return x;
     } catch (e) { setErr(String(e)); setD(null); onData(null); return null; }
-  }, [instrumentKey, tf, ha, onData]);
+  }, [instrumentKey, tf, ha, onData, asOf]);
   useEffect(() => { if (ready) load(); }, [load, ready]);
 
   // a new data set: hand it to the chart, then Drishti layers, indicators and saved drawings
@@ -185,27 +185,15 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
     c.resetData();
   }, [d]);
 
-  // scanner alert levels (only when a page passes them)
+  // scanner alert layer (only when a page passes levels): always on, never gated by a layer toggle
   useEffect(() => {
     const c = chart.current;
     if (!c || !d || !bars.current.length) return;
-    c.removeOverlay({ groupId: "alert" });
+    c.removeOverlay({ groupId: ALERT_GROUP });
     if (!levels) return;
-    const t1 = bars.current[bars.current.length - 1].timestamp;
-    const line = (value: number, label: string, color: string, dashed: boolean) => ({ name: "d_level", groupId: "alert", lock: true,
-      extendData: { label: `${label} ${value.toFixed(2)}`, color, dashed }, points: [{ timestamp: t1, value }] }) as OverlayCreate;
-    const ov: OverlayCreate[] = [line(levels.entry, "Entry", "#3a86ff", false), line(levels.stop, "Stop", "#e03131", false)];
-    if (levels.r1 !== null) ov.push(line(levels.r1, "R1", "#2f9e44", true));
-    if (levels.r2 !== null) ov.push(line(levels.r2, "R2", "#2f9e44", true));
-    // the alert's own R1 / R2 bands, as saved with the alert (not today's zones)
-    levels.zones.forEach((z) => ov.push({ name: "d_band", groupId: "alert", lock: true,
-      extendData: { top: z.top, bottom: z.bottom, label: `${z.name.toUpperCase()} zone (alert's) ${z.bottom.toFixed(2)}–${z.top.toFixed(2)}${z.first ? ` · pivots ${z.first.slice(0, 10)} → ${(z.last ?? "").slice(0, 10)}` : ""}${z.confirmed ? ` · confirmed ${z.confirmed.slice(0, 10)}` : ""}` },
-      points: [{ timestamp: t1, value: z.top }] } as OverlayCreate));
-    // the alert bar: 1d bars are keyed by the IST date, intraday bars by their start time
-    const at = levels.tf === "1d" ? ts(new Date(levels.barTime).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })) : Date.parse(levels.barTime);
-    const bar = bars.current.find((k) => k.timestamp === at);
-    if (bar && (levels.tf === d.tf)) ov.push({ name: "d_mark", groupId: "alert", lock: true, extendData: "ALERT", points: [{ timestamp: at, value: bar.high }] } as OverlayCreate);
+    const ov = alertOverlays(levels, bars.current, d.tf, d.zones_as_of ?? null);
     c.createOverlay(ov);
+    box.current?.setAttribute("data-alert-layer", ov.map((o) => o.name).join(","));
   }, [d, levelsKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Drishti layers
@@ -543,7 +531,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
       )}
       {layers.trend && d && <TrendStrip d={d} live={live} />}
       <div className="kc-mknote kc-pit" role="note">
-        {levels && <span>Point in time: lines and green bands are the alert&apos;s saved levels{levels.zones.length ? "" : " (this alert has no saved zones: R1 / R2 lines only)"}.</span>}
+        {levels && <span>Alert layer (always on): entry / stop / R1 / R2 and {levels.zones.length ? "the alert's saved R1 / R2 zones (green)" : "the S/R known at the alert bar (blue-grey; this alert has no saved zones)"}. Point in time.</span>}
         {levels && <label className="tog"><input type="checkbox" checked={todayZ} onChange={(e) => setTodayZ(e.target.checked)} />Today&apos;s zones (not the alert&apos;s)</label>}
         <label className="tog"><input type="checkbox" checked={layers.patterns !== "off"} onChange={(e) => setLayersP({ ...layers, patterns: e.target.checked ? "bullish" : "off" })} />Candlestick patterns (context)</label>
         {(layers.patterns !== "off" || layers.signals) && <span className="kc-legend-line">{LEGEND} Pattern - NOT a prediction; not used by drishti-swing-v1. {levels ? null : <a href="/scanner">Scanner alerts</a>}</span>}

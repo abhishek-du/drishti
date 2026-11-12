@@ -412,3 +412,45 @@ def test_today_1d_bar_uses_the_recorder_day_ohlc(tmp_path, monkeypatch):
     assert (t["open"], t["high"], t["low"], t["close"]) == (100.0, 104.0, 97.5, 98.5)
     assert t["volume"] == 1050 and t["from_recorder"]
     assert c.today_ohlc("NSE_EQ|NONE", day, 50.0)["from_recorder"] is False
+
+
+# --- alert panel: the alert layer is always on ----------------------------------------------------
+
+def test_zones_as_of_point_in_time():
+    """The alert panel's S/R (when an alert has no saved zones) are the zones known on the alert
+    bar: equal to levels.zones on the bars up to it, unchanged when later bars arrive."""
+    df = _bars(300)
+    k = 240
+    as_of = _dt.datetime.fromisoformat(f"{df.time[k]}T14:00:00+00:00")
+    z = chart_api.zones_as_of(df, "1d", as_of)
+    atr = indicators.atr(df.iloc[:k + 1]).iloc[-1]
+    want = levels.zones(df.high.to_numpy()[:k + 1], df.low.to_numpy()[:k + 1], float(atr))
+    assert z["bar"] == df.time[k] and len(z["zones"]) == len(want) > 0
+    assert [round(x["price"], 4) for x in z["zones"]] == [round(x["price"], 4) for x in want]
+    assert chart_api.zones_as_of(df.iloc[:k + 1], "1d", as_of) == z          # later bars: no effect
+    early = _dt.datetime(2000, 1, 1, tzinfo=_dt.timezone.utc)
+    assert chart_api.zones_as_of(df, "1d", early) is None
+    di = _bars(500, intraday=True)
+    zi = chart_api.zones_as_of(di, "15m", _dt.datetime.fromtimestamp(int(di.time[300]), _dt.timezone.utc))
+    assert zi["bar"] == int(di.time[300])
+
+
+def test_bars_as_of(client):
+    j = client.get("/api/chart2/bars", params={"key": "K", "tf": "1d", "as_of": "2026-01-15T10:00:00+00:00"}).json()
+    assert "zones_as_of" in j and j["zones_as_of"]["bar"] <= "2026-01-15"
+    assert "zones_as_of" not in client.get("/api/chart2/bars", params={"key": "K", "tf": "1d"}).json()
+
+
+def test_web_alert_layer_always_on():
+    """web/tests/alertLayers.test.mjs: on an alert page with both pattern layers OFF the entry /
+    stop / R1 / R2 lines, the ALERT marker and the S/R bands are present (node --test)."""
+    import shutil
+    import subprocess
+    node = shutil.which("node") or str(Path.home() / ".local/bin/node")
+    if not Path(node).exists():
+        pytest.skip("node not installed")
+    root = API.parents[2]
+    r = subprocess.run([node, "--test", "web/tests/alertLayers.test.mjs"], cwd=root,
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
+    assert "pass 5" in r.stdout

@@ -13,6 +13,8 @@ Blind rule: no outcome or P&L of any signal or watchlist entry is served here.
 
 from __future__ import annotations
 
+import datetime as _dt
+
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
@@ -204,14 +206,43 @@ async def _meta(key: str, tf: str) -> dict:
             "sector": sym and sym["sector"], "watchlist_dates": wl}
 
 
+IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
+
+
+def zones_as_of(df: pd.DataFrame, tf: str, as_of: _dt.datetime) -> dict | None:
+    """The S/R zones known on the last bar at or before `as_of` (a scanner alert's bar time):
+    levels.zones on the rows up to that bar only, with the ATR of that bar (point in time; the
+    alert panel's S/R when the alert has no saved zones). None when no bar is that old."""
+    df = df.reset_index(drop=True)
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=_dt.timezone.utc)
+    if tf == "1d":
+        ok = df.time.astype(str) <= as_of.astimezone(IST).date().isoformat()
+    else:
+        ok = df.time.astype("int64") <= int(as_of.timestamp())
+    if not ok.any():
+        return None
+    k = int(np.flatnonzero(ok.to_numpy())[-1])
+    atr = float(indicators.atr(df.iloc[:k + 1]).iloc[-1])
+    zs = levels.zones(df.high.to_numpy(float)[:k + 1], df.low.to_numpy(float)[:k + 1], atr) \
+        if atr > 0 else []
+    t = [x if isinstance(x, str) else int(x) for x in df.time]
+    return {"bar": t[k], "zones": [{k2: (_f(v) if isinstance(v, float) else v) for k2, v in z.items()}
+                                   | {"first": t[z["first"]], "last": t[z["last"]]} for z in zs]}
+
+
 @router.get("/bars")
-async def chart_bars(key: str, tf: str = "1d", ha: bool = False) -> dict:
-    """`ha`: the bars are Heikin Ashi (chg_pct too); everything else is on the real bars."""
+async def chart_bars(key: str, tf: str = "1d", ha: bool = False,
+                     as_of: _dt.datetime | None = None) -> dict:
+    """`ha`: the bars are Heikin Ashi (chg_pct too); everything else is on the real bars.
+    `as_of` (an alert's bar time): also return `zones_as_of`, the zones known on that bar."""
     tf = _tf(tf)
     df, src = await load(key, tf)
     if df.empty:
         raise HTTPException(404, f"no {tf} bars for {key}")
     out = compute(df, tf)
+    if as_of is not None:
+        out["zones_as_of"] = zones_as_of(df, tf, as_of)
     if ha:
         hb = heikin_ashi(df.reset_index(drop=True))
         chg = hb.close.pct_change() * 100
