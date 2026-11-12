@@ -45,3 +45,9 @@
 # Time Machine odds (research/simulation, NOT a signal; Track B engine) for the day's 1d scanner
 # alerts -> odds_result; bars as known at each alert's 19:45 scan (reproducible). ~3 s.
 15 20 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh odds
+# Paper portfolio pf-v1 daily loop (Phase 3; PAPER ONLY): the previous session's fills, exits,
+# mark to market, decisions and snapshot once its official 1d is in (06:30 daily1d), + a
+# Telegram summary. Does nothing before `paper.run init` (forward start Mon 2026-11-23); a
+# second run at 10:30 picks up a late official bar (a processed session is never re-run).
+45 8 * * 2-6   /home/cis/windows/drishti/ops/runbooks/drishti_job.sh pf_session
+30 10 * * 2-6  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh pf_session

@@ -114,3 +114,18 @@ async def position_events(pid: str, key: str | None = None,
     return {"label": LABEL, "events": await _rows("""select * from pf_position_event
         where portfolio_id = :i and (cast(:k as text) is null or instrument_key = :k)
         order by ts desc, id desc limit :n""", {"i": _pid_ok(pid), "k": key, "n": limit})}
+
+
+@router.get("/api/portfolio/{pid}/stats")
+async def stats(pid: str, book: str | None = None) -> dict:
+    """pf-v1 Phase 4: per-trade statistics net of costs + equity vs the Nifty 500 benchmark."""
+    from drishti.paper.stats import equity_stats, trade_stats
+    pid = _pid_ok(pid)
+    tr = await _rows("""select net_pnl, r_multiple, costs, holding_sessions, reason_out
+        from pf_trade where portfolio_id = :i and (cast(:b as text) is null or book = :b)
+        order by exit_ts""", {"i": pid, "b": book})
+    eq = await _rows("""select date, equity, benchmark_equity from pf_equity_latest
+        where portfolio_id = :i and book = 'all' order by date""", {"i": pid})
+    cap = await _rows("select starting_capital from pf_portfolio where id = :i", {"i": pid})
+    return {"label": LABEL, "trades": trade_stats(tr),
+            "equity": equity_stats(eq, float(cap[0]["starting_capital"]) if cap else 1.0)}

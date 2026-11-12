@@ -3,10 +3,11 @@
     .venv/bin/python -m drishti.paper.run init [--start YYYY-MM-DD]   # create the 5 portfolios
     .venv/bin/python -m drishti.paper.run mtm                         # mark open positions
     .venv/bin/python -m drishti.paper.run snapshot [--date D]         # pf_equity rows of D
+    .venv/bin/python -m drishti.paper.run session [--until D] [--no-telegram]   # Phase 3 loop
 
 Prices for the mark: Drishti's own 15:40 EOD quotes of the latest session (last price of the
-day, eod_quote), else the official 1d close (bar_1d). No scheduling yet: the cron lines come
-with the Phase 3 loop.
+day, eod_quote), else the official 1d close (bar_1d). `session` is the Phase 3 daily loop
+(drishti.paper.loop), scheduled in ops/cron_after_switch.txt; it does nothing before `init`.
 """
 
 from __future__ import annotations
@@ -70,6 +71,13 @@ async def main(cmd: str, args: list[str]) -> dict:
                 day = _dt.date.fromisoformat(args[args.index("--date") + 1]) \
                     if "--date" in args else today()
                 out = await ledger.snapshot(s, day, now())
+            elif cmd == "session":
+                from drishti.core.db import prajna_sessionmaker
+                from drishti.paper import loop
+                until = _dt.date.fromisoformat(args[args.index("--until") + 1]) \
+                    if "--until" in args else None
+                async with prajna_sessionmaker()() as ps:
+                    out = await loop.run(s, ps, until, telegram="--no-telegram" not in args)
             else:
                 raise SystemExit(__doc__)
         except BaseException as e:
@@ -81,4 +89,6 @@ async def main(cmd: str, args: list[str]) -> dict:
 
 
 if __name__ == "__main__":
-    print(json.dumps(asyncio.run(main(sys.argv[1], sys.argv[2:])), indent=1, default=str))
+    # "pf_session" etc. from ops/runbooks/drishti_job.sh
+    print(json.dumps(asyncio.run(main(sys.argv[1].removeprefix("pf_"), sys.argv[2:])), indent=1,
+                     default=str))

@@ -1,16 +1,18 @@
 "use client";
-// Paper portfolio pf-v1, Phase 1: READ ONLY (Track A minimal page; Track C owns the full UI and
+// Paper portfolio pf-v1 (Phase 1 page + Phase 4 curve and stats): READ ONLY (Track A minimal page; Track C owns the full UI and
 // the nav link). Portfolios, open positions, recent orders / trades / decisions, the equity
 // rows and the frozen pre-registration values. PAPER ONLY: no buttons, no orders.
 import { useEffect, useState } from "react";
 import { fmt, get, stockHref } from "@/components/api";
 import { DecisionLabel } from "@/components/scan";
+import EquityCurve from "@/components/EquityCurve";
 
 type Pf = { id: string; kind: string; label: string; research_only: boolean; starting_capital: number;
   cash: number; holdings_value: number; equity: number; peak_equity: number; total_return: number | null;
   drawdown: number | null; open_positions: number; as_of: string; start_date: string };
 type Resp = { label: string; note: string; prereg: Record<string, unknown>; portfolios: Pf[] };
 type Row = Record<string, string | number | boolean | null>;
+type Stats = { trades: Record<string, unknown>; equity: Record<string, number | null> };
 
 const pct = (x: number | null | undefined) => (x === null || x === undefined ? "–" : `${fmt(100 * x, 2)}%`);
 const ist = (iso: unknown) => (typeof iso === "string" ? new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "–");
@@ -37,6 +39,7 @@ export default function PortfolioPage() {
   const [trd, setTrd] = useState<Row[]>([]);
   const [dec, setDec] = useState<Row[]>([]);
   const [eq, setEq] = useState<Row[]>([]);
+  const [st, setSt] = useState<Stats | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => { get<Resp>("/api/portfolio").then(setD).catch((e) => setErr(String(e))); }, []);
@@ -47,6 +50,7 @@ export default function PortfolioPage() {
       get<{ trades: Row[] }>(`/api/portfolio/${pid}/trades?limit=50`).then((r) => setTrd(r.trades)),
       get<{ decisions: Row[] }>(`/api/portfolio/${pid}/decisions?limit=50`).then((r) => setDec(r.decisions)),
       get<{ equity: Row[] }>(`/api/portfolio/${pid}/equity`).then((r) => setEq(r.equity)),
+      get<Stats>(`/api/portfolio/${pid}/stats`).then(setSt),
     ]).catch((e) => setErr(String(e)));
   }, [pid]);
 
@@ -69,6 +73,12 @@ export default function PortfolioPage() {
       <h3>Open positions · {pid}</h3>
       <Table rows={pos} cols={[["instrument_key", "Symbol"], ["book", "Book"], ["product", "Product"], ["qty", "Qty"], ["avg_price", "Avg"],
         ["last_price", "Last"], ["unrealized_pnl", "Unrealised (net)"], ["stop", "Stop"], ["target", "Target"], ["opened_ts", "Opened"]]} />
+      <h3>Equity vs Nifty 500 · {pid}</h3>
+      <EquityCurve rows={eq as never} start={d?.portfolios.find((p) => p.id === pid)?.starting_capital ?? 1000000} />
+      {st && Number(st.trades.trades) > 0 && (
+        <p className="small">Trades {String(st.trades.trades)} · hit rate {pct(st.trades.hit_rate as number)} · payoff {String(st.trades.payoff_ratio ?? "–")} ·
+          expectancy ₹{fmt(st.trades.expectancy_rs as number)} ({String(st.trades.expectancy_r ?? "–")} R) · costs ₹{fmt(st.trades.costs as number)} ·
+          max drawdown {pct(st.equity.max_drawdown)} · vs Nifty 500 {pct(st.equity.excess_return)} (net of costs; display only, the one look is pre-registered)</p>)}
       <h3>Equity (daily, net of costs)</h3>
       <Table rows={eq} cols={[["date", "Date"], ["equity", "Equity"], ["cash", "Cash"], ["daily_pnl", "Day P&L"], ["drawdown", "Drawdown"],
         ["benchmark_equity", "Benchmark"], ["placebo_equity", "Placebo"]]} />
