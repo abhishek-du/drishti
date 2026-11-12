@@ -335,3 +335,59 @@ def test_intraday_history_is_split_adjusted_and_the_copy_equals_live(tmp_path, m
         assert (live.t == cpy.t).all()
 
     asyncio.run(go())
+
+
+def test_history_union_adds_own_bars_after_the_cutover_only(monkeypatch):
+    """Re-point step 3 (2026-11-12): in copy mode the daily series = the D1 copy up to the cutover
+    + Drishti's own newest 1d fetch after it; nothing before the cutover changes."""
+    import asyncio
+    import datetime as dt
+    import random
+    import pytest
+    from sqlalchemy import text
+    from drishti.core import config, db
+    from drishti.data import bars
+    from drishti.switch import repoint
+
+    try:
+        info = repoint.make_history_views("drishti_test")
+    except Exception as e:                       # no dry-run copy schema on this host
+        pytest.skip(f"no prajna_copy in drishti_test: {e}")
+    cut = dt.date.fromisoformat(info["cutover"])
+    day = cut + dt.timedelta(days=1)
+    while day.weekday() > 4:
+        day += dt.timedelta(days=1)
+    key = "NSE_EQ|INE002A01018"
+    px = round(1000 + random.random() * 100, 2)
+
+    async def go():
+        async with db.sessionmaker()() as s:
+            rid = (await s.execute(text("""insert into run(run_id, kind, code_sha, params) values
+                (gen_random_uuid(), 'TEST_HIST', 't', '{}') returning run_id"""))).scalar()
+            pid = (await s.execute(text("""insert into bar_1d_payload(run_id, instrument_key,
+                req_from, req_to, http_status, sha256, n_candles, basis_as_of) values (:r, :k, :d,
+                :d, 200, md5(random()::text) || md5(random()::text), 1, :d) returning id"""),
+                {"r": rid, "k": key, "d": day})).scalar()
+            for close in (px - 5, px):                  # two fetches: the newest one wins
+                await s.execute(text("""insert into bar_1d(payload_id, instrument_key,
+                    session_date, open, high, low, close, volume, fetched_at) values (:p, :k, :d,
+                    :c, :c, :c, :c, 100, clock_timestamp())"""),
+                    {"p": pid, "k": key, "d": day, "c": close})
+            await s.commit()
+        await db.engine().dispose()
+        monkeypatch.setenv("DRISHTI_HISTORY_SOURCE", "copy")
+        config.get_settings.cache_clear()
+        db.prajna_engine.cache_clear()
+        try:
+            async with db.prajna_sessionmaker()() as cp:
+                b = await bars.official(cp, day, 40, keys=[key])
+            await db.prajna_engine().dispose()
+        finally:
+            config.get_settings.cache_clear()
+            db.prajna_engine.cache_clear()
+            db.engine.cache_clear()
+        mine = b[b.session_date == day]
+        assert len(mine) == 1 and float(mine.close.iloc[0]) == px      # own bar, newest fetch
+        assert (b.session_date <= cut).sum() > 0                        # the copy part is there
+
+    asyncio.run(go())

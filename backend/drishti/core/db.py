@@ -31,7 +31,7 @@ def prajna_engine() -> AsyncEngine:
 
 def copy_engine(url: str) -> AsyncEngine:
     return create_async_engine(url, pool_pre_ping=True, connect_args={"server_settings": {
-        "search_path": f"{COPY_SCHEMA},public", "default_transaction_read_only": "on"}})
+        "search_path": f"history,{COPY_SCHEMA},public", "default_transaction_read_only": "on"}})
 
 
 def sessionmaker() -> async_sessionmaker:

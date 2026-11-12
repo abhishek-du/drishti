@@ -1,6 +1,7 @@
 """Re-point check (SWITCH_TO_B part 4): Drishti's reads on the D1 copy must equal its reads on
 Prajna's live DB, before DRISHTI_HISTORY_SOURCE is flipped to 'copy' at the switch.
 
+    .venv/bin/python -m drishti.switch.repoint history --target drishti [--cutover D]  # step 3
     .venv/bin/python -m drishti.switch.repoint verify --target drishti --out DIR [--n 50]
         [--months 2026-09] [--day YYYY-MM-DD]
 
@@ -88,7 +89,78 @@ async def verify(target: str, out: Path, n: int, months: list[str] | None,
     return rep
 
 
+HISTORY_SQL = """
+create schema if not exists history;
+create table if not exists history.cutover (d date not null);
+insert into history.cutover(d) select coalesce(cast(:cut as date),
+    (select max(session_date) from prajna_copy.ohlcv_bar_1d))
+  where not exists (select 1 from history.cutover);
+create or replace view history.ohlcv_bar as
+  select * from prajna_copy.ohlcv_bar_1d
+  union all
+  -- Drishti's own nightly 1d after the cutover; the newest fetch per (stock, session) (the
+  -- nightly job re-fetches T-5..T, so a bar can appear several times in bar_1d)
+  select ci.instrument_id, cast('1d' as varchar(8)), b.session_date,
+         (b.session_date::timestamp at time zone 'Asia/Kolkata'),
+         cast('DRISHTI_UPSTOX_V3' as varchar(32)), cast(b.instrument_key as varchar(80)),
+         cast(b.open as numeric(18,4)), cast(b.high as numeric(18,4)),
+         cast(b.low as numeric(18,4)), cast(b.close as numeric(18,4)),
+         cast(b.volume as numeric(22,0)), cast(b.oi as numeric(22,0)), ''::text, p.run_id,
+         p.sha256, b.fetched_at, b.fetched_at, true,
+         cast('drishti fetch time (own 1d ingest)' as varchar(200))
+  from (select distinct on (instrument_key, session_date) * from public.bar_1d
+        where session_date > (select d from history.cutover)
+        order by instrument_key, session_date, fetched_at desc, id desc) b
+  join public.bar_1d_payload p on p.id = b.payload_id
+  join prajna_copy.canon_instrument ci on ci.instrument_key = b.instrument_key;
+create or replace view history.ohlcv_payload_basis as
+  select * from prajna_copy.ohlcv_payload_basis
+  union all
+  select distinct p.sha256, cast('historical' as varchar(16)), cast('VENDOR_ADJUSTED' as varchar(20)),
+         p.basis_as_of, cast('HIGH' as varchar(8)), cast('drishti-own-v1' as varchar(32)),
+         '{}'::jsonb
+  from public.bar_1d_payload p
+  where exists (select 1 from public.bar_1d b where b.payload_id = p.id
+                and b.session_date > (select d from history.cutover));
+create or replace view history.canon_ca_factor as
+  select * from prajna_copy.canon_ca_factor
+  union all
+  select f.id + 1000000000, f.ca_id + 1000000000, cast(c.instrument_key as varchar(80)),
+         cast(c.action_type as varchar(16)), c.ex_date, cast(f.status as varchar(12)),
+         cast(f.method as varchar(16)), cast(f.factor_price as numeric(24,12)),
+         cast(f.factor_volume as numeric(24,12)), greatest(c.knowable_at, f.derived_at),
+         cast(f.vendor_applied as varchar(12)), f.vendor_evidence, f.reason, f.inputs,
+         cast(f.method_version as varchar(32)), f.derived_at, f.run_id
+  from public.ca_factor f join public.corporate_action c on c.id = f.ca_id
+  where c.ex_date > (select d from history.cutover);
+"""
+
+
+def make_history_views(target: str, cutover: str | None = None) -> dict:
+    """Re-point step 3 (2026-11-12): the `history` schema = the D1 copy up to the cutover date +
+    Drishti's own 1d bars and CA factors after it (no event counted twice). canon_market_bar is
+    recreated from Prajna's definition over these union views. In copy mode the engine's
+    search_path is history, prajna_copy, so every reader sees one continuous series. Before
+    the switch the cutover is the copy's last session: the result equals the copy."""
+    from drishti.switch import d1copy as D
+    sqltxt = HISTORY_SQL.replace(":cut", "NULL" if cutover is None else f"'{cutover}'")
+    body = "\n".join("|".join(r) for r in D.sql(
+        "prajna", "select pg_get_viewdef('public.canon_market_bar'::regclass, true)")).strip()
+    sqltxt += ("set search_path = history, prajna_copy;\n"
+               f"create or replace view history.canon_market_bar as {body.rstrip(';')};\n"
+               "grant usage on schema history to drishti_app;\n"
+               "grant select on all tables in schema history to drishti_app;\n")
+    D.sql(target, sqltxt, False)
+    cut = D.sql(target, "select d from history.cutover", False)[0][0]
+    n = {v: int(D.sql(target, f"select count(*) from history.{v}", False)[0][0])
+         for v in ("ohlcv_bar", "canon_ca_factor", "canon_market_bar")}
+    return {"cutover": cut, **n}
+
+
 def main(argv: list[str]) -> dict:
+    if argv and argv[0] == "history":
+        a = dict(zip(argv[1::2], argv[2::2]))
+        return make_history_views(a["--target"], a.get("--cutover"))
     if not argv or argv[0] != "verify":
         raise SystemExit(__doc__)
     a = dict(zip(argv[1::2], argv[2::2]))
