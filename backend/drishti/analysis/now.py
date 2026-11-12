@@ -33,7 +33,7 @@ from drishti.scanner import detect, grade
 LABEL = ("Decision support — not a prediction and not a validated edge. Paper only. Your call. "
          "Odds are the stock's own history for this stop/target geometry, not a forecast.")
 _cache: dict[str, tuple[float, dict]] = {}
-TTL_S = 20.0
+TTL_S = 8.0           # the panel refreshes every 10 s in market hours
 
 
 def _f(x, nd=2):
@@ -189,5 +189,77 @@ async def analyse(s, ps, key: str, live, ltp: float | None = None, n_paths: int 
                     "radar_today": {"bar_time": radar[0].isoformat(), "reason": radar[1]}
                     if radar else None, "watchlist_rank": wl},
     }
+    out["verdicts"] = verdicts(out)
     _cache[key] = (time.monotonic(), out)
     return out
+
+
+def _tm_points(o: dict | None, horizon: int) -> list[str]:
+    """The Time Machine result in plain points (display)."""
+    if not o or "mc" not in o:
+        return ["Time Machine: no odds (" + str((o or {}).get("error", "not enough history")) + ")"]
+    mc = o["mc"]
+    pct = lambda x: "–" if x is None else f"{100 * x:.0f}%"  # noqa: E731
+    v = o.get("verdict", "")
+    kind = ("history LOSES on this geometry" if "LOSE" in v else
+            "about break-even" if "about break-even" in v else
+            "clears break-even (drift/volatility, not entry edge)" if "clear" in v else
+            "mostly neither barrier" if v.startswith("MOSTLY NEITHER") else v.split(":")[0])
+    return [f"Target first {pct(mc['target_first'])} · stop first {pct(mc['stop_first'])} · "
+            f"neither {pct(mc['neither'])} in {horizon} sessions",
+            f"Net break-even needs {pct(o.get('breakeven'))} target-first",
+            f"Average {mc['avg_r_net']:+.2f} R net, median {mc['median_r_net']:+.2f} R, "
+            f"5–95% {mc['p05_r_net']:+.2f} … {mc['p95_r_net']:+.2f} R",
+            f"Replay N {o.get('replay_n')}" + (" (thin sample)" if o.get("thin_sample") else ""),
+            f"Verdict: {kind}"]
+
+
+def verdicts(a: dict) -> dict:
+    """Per-timeframe RULE VERDICT tags (not advice, not a prediction): what the frozen paper-
+    portfolio rules (PREREG_PAPER_PORTFOLIO pf-v1) say about buying this stock now.
+      1d   regime ON -> odds gate (avg net R >= +0.05, replay N >= 30, not thin) -> results known
+           and none in the hold -> net R:R >= 1 -> a size of >= 1 share: TAKE (paper) / SKIP
+      15m  OBSERVE ONLY: no 15m odds engine yet (intraday is in observe mode); shows today's
+           15m scanner alert of the stock, if any
+      5m/1m NO RULE: no setup on these timeframes was ever tested"""
+    c, p, o, e = a["context"], a["plan_if_bought_now"], a["odds"] or {}, a["events"]
+    checks = [
+        ("regime", c["regime"] == "ON" and c["spec_gate"] == "ON",
+         f"market regime {c['regime']} / spec gate {c['spec_gate']}"),
+        ("odds", bool(o.get("paper_gate_pass")) and not o.get("thin_sample"),
+         "odds gate: avg net R "
+         + (f"{o['mc']['avg_r_net']:+.2f}" if o.get("mc") else "n/a")
+         + f" (needs >= +0.05), replay N {o.get('replay_n')}"),
+        ("results", not e["results_in_hold"],
+         "results calendar " + ("UNKNOWN (board-meetings CSV missing/stale)"
+                                if e["code"] == "SKIP_RESULTS_UNKNOWN" else
+                                "has a results meeting in the hold" if e["results_in_hold"]
+                                else "clear")),
+        ("net_rr", (p["net_rr"] or 0) >= 1.0, f"net R:R {p['net_rr']} (needs >= 1)"),
+        ("size", (p["qty_1pct_of_10L"] or 0) >= 1, f"qty {p['qty_1pct_of_10L']} at 1% risk"),
+    ]
+    fails = [why for _, ok, why in checks if not ok]
+    d1 = {"tag": "RULES: BUY ✓" if not fails else "RULES: DON'T BUY ✗",
+          "tone": "pass" if not fails else "skip",
+          "reasons": fails or ["every rule passes: regime ON, odds OK, no results in the hold, "
+                               "net R:R >= 1, size fits"],
+          "checks": [{"gate": g, "pass": ok, "why": why} for g, ok, why in checks],
+          "plan": f"entry {p['entry']} · stop {p['stop']} · target {p['target']} "
+                  f"({p['target_basis']}) · {p['horizon_sessions']} sessions",
+          "time_machine": _tm_points(o, p["horizon_sessions"])}
+    al15 = [x for x in a["scanner"]["alerts_today"] if x["tf"] == "15m"]
+    m15 = {"tag": "NO 15m RULE YET", "tone": "info",
+           "reasons": ["no 15m odds engine yet: intraday stays in observe mode (pf-v1)",
+                       "MIS rule if traded: flat by 15:20"],
+           "plan": (f"latest 15m alert {al15[0]['detector']} at {al15[0]['bar_time'][11:16]} "
+                    f"UTC bar: entry {al15[0]['entry_ref']} · stop {al15[0]['stop']}")
+           if al15 else "no 15m scanner alert today for this stock",
+           "time_machine": ["Time Machine: pending for 15m (the daily engine is not used for "
+                            "intraday trades)"]}
+    nr = {"tag": "NO RULE", "tone": "info",
+          "reasons": ["no setup on this timeframe was ever tested; the chart is information only"],
+          "plan": None, "time_machine": []}
+    return {"1d": d1, "15m": m15, "5m": nr, "1m": nr, "1h": {**nr, "reasons": [
+        "no rule on 1h; the swing rule uses daily bars (see 1d)"]},
+        "note": "What your frozen rules (pf-v1) say right now, from live data. A rule result, "
+                "not a guarantee. Paper only. Your call."}

@@ -45,7 +45,7 @@ export default function AnalysisPanel({ instrumentKey }: { instrumentKey: string
   }, [instrumentKey]);
   useEffect(() => {
     load();
-    const iv = setInterval(() => { if (marketOpen() && !document.hidden) load(); }, 30000);
+    const iv = setInterval(() => { if (marketOpen() && !document.hidden) load(); }, 10000);
     return () => clearInterval(iv);
   }, [load]);
 
@@ -58,7 +58,7 @@ export default function AnalysisPanel({ instrumentKey }: { instrumentKey: string
       <div className="dlabel" role="note">{a.label}</div>
       <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <h3 style={{ margin: "6px 0" }}>Analysis now · {a.symbol ?? instrumentKey}</h3>
-        <span className="muted small">updated {ist(a.as_of)} IST{marketOpen() ? " · refreshes every 30 s" : ""}</span>
+        <span className="muted small">updated {ist(a.as_of)} IST{marketOpen() ? " · refreshes every 10 s" : ""}</span>
       </div>
       {a.history.provisional_filled.length > 0 && <p className="muted small">Official daily bar not stored yet for {a.history.provisional_filled.join(", ")}: Drishti&apos;s 15:40 provisional bar is used until it arrives.</p>}
       {a.history.lagging && <p className="pill warn small">{a.history.note} (indicators use the stored history + today&apos;s live bar)</p>}

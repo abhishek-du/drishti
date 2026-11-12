@@ -32,3 +32,26 @@ def test_analysis_now_plan_and_point_in_time_odds():
             db.prajna_engine.cache_clear()
 
     asyncio.run(go())
+
+
+def test_rule_verdict_tags():
+    base = {"context": {"regime": "ON", "spec_gate": "ON"},
+            "plan_if_bought_now": {"net_rr": 1.4, "qty_1pct_of_10L": 100, "entry": 100,
+                                   "stop": 95, "target": 110, "target_basis": "2R",
+                                   "horizon_sessions": 5},
+            "odds": {"paper_gate_pass": True, "thin_sample": False, "replay_n": 300,
+                     "breakeven": 0.4, "verdict": "Net R:R ... clear",
+                     "mc": {"avg_r_net": 0.12, "median_r_net": 0.1, "target_first": 0.4,
+                            "stop_first": 0.3, "neither": 0.3, "p05_r_net": -1.2,
+                            "p95_r_net": 1.9}},
+            "events": {"results_in_hold": False, "code": None, "why": "none"},
+            "scanner": {"alerts_today": []}}
+    v = A.verdicts(base)
+    assert v["1d"]["tag"] == "RULES: BUY ✓" and v["15m"]["tag"] == "NO 15m RULE YET"
+    assert v["5m"]["tag"] == "NO RULE" and len(v["1d"]["time_machine"]) == 5
+    bad = {**base, "odds": {**base["odds"], "paper_gate_pass": False,
+                            "mc": {**base["odds"]["mc"], "avg_r_net": -0.06}}}
+    v = A.verdicts(bad)
+    assert v["1d"]["tag"] == "RULES: DON'T BUY ✗" and "odds gate" in v["1d"]["reasons"][0]
+    unk = {**base, "events": {"results_in_hold": True, "code": "SKIP_RESULTS_UNKNOWN", "why": "x"}}
+    assert any("UNKNOWN" in r for r in A.verdicts(unk)["1d"]["reasons"])
