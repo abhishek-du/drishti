@@ -41,3 +41,6 @@
 # Time Machine odds (research/simulation, NOT a signal; Track B engine) for the day's 1d scanner
 # alerts -> odds_result; bars as known at each alert's 19:45 scan (reproducible). ~3 s.
 15 20 * * 1-5  /home/cis/windows/drishti/ops/runbooks/drishti_job.sh odds
+# Shadow days until the switch (11-13..11-19; the script stops itself after 11-19): delta copy +
+# Scout / EOD scan compared on both history sources (read only). After scan_eod + odds.
+30 20 * * 1-5  /home/cis/windows/drishti/ops/runbooks/shadow_nightly.sh
