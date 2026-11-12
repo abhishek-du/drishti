@@ -114,16 +114,12 @@ def parquet_1m(keys: list[str], since: _dt.date) -> pd.DataFrame:
 
 
 async def bars15(ps, keys: list[str], since: _dt.date) -> pd.DataFrame:
-    """15m bars of `keys` since `since`: Prajna's stored 15m for past days, the recorder's 1m
+    """15m bars of `keys` since `since`: the adjusted 15m history for past days, the recorder's 1m
     (Parquet + the live snapshot) for days Prajna does not have (today; everything after the
     switch). Bars of different sources never mix within one day."""
-    rows = (await ps.execute(text("""select distinct on (instrument_key, bar_start_utc)
-        instrument_key, bar_start_utc, open, high, low, close, volume from ohlcv_bar
-        where timeframe = '15m' and session_date >= :d and instrument_key = any(:k)
-        order by instrument_key, bar_start_utc, fetched_at desc"""),
-        {"d": since, "k": keys})).all()
-    pj = pd.DataFrame(rows, columns=["instrument_key", "t", "open", "high", "low", "close",
-                                     "volume"])
+    # split/bonus adjusted history (bars.intraday; Prajna live or the D1 copy, 2026-11-12)
+    pj = (await bars.intraday(ps, keys, "15m", since))[
+        ["instrument_key", "t", "open", "high", "low", "close", "volume"]]
     own = agg15(pd.concat([parquet_1m(keys, since), live_1m(keys)])
                 .drop_duplicates(["instrument_key", "t"], keep="last"))
     if not pj.empty:

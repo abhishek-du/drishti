@@ -48,9 +48,20 @@ async def official(ps, day: _dt.date, days: int = 450, as_of: _dt.datetime | Non
     if df.empty:
         return df
     df = df[~df.session_date.isin(SHORT_SESSIONS)]
+    return (await adjust(ps, df, as_of, "1d")).sort_values(
+        ["instrument_key", "session_date"]).reset_index(drop=True)
+
+
+async def adjust(ps, df: pd.DataFrame, as_of: _dt.datetime, tf: str) -> pd.DataFrame:
+    """Split/bonus adjustment, point in time, for bars of any timeframe. `df` has
+    instrument_key, session_date, OHLCV and payload (the bar's payload sha256); extra columns are
+    kept. A bar before an EXACT factor's ex-date (knowable before as_of) is divided by the
+    factor, unless its payload was already served adjusted by the vendor (VENDOR_ADJUSTED with
+    basis_as_of >= ex-date and not re-served raw). The same rule as the daily bars (2026-11-12:
+    intraday too, which fixes DEVIATIONS D5)."""
     basis = pd.DataFrame((await ps.execute(text("""select payload_sha256, price_basis, basis_as_of
         from ohlcv_payload_basis where payload_sha256 = any(:h)"""),
-        {"h": df.payload.unique().tolist()})).all(), columns=["payload", "pb", "bas"])
+        {"h": df.payload.dropna().unique().tolist()})).all(), columns=["payload", "pb", "bas"])
     ev = pd.DataFrame((await ps.execute(text("""select ca_id, instrument_key, ex_date,
         factor_price, knowable_at, vendor_applied from canon_ca_factor
         where status = 'EXACT' and ex_date is not null"""))).all(),
@@ -64,8 +75,9 @@ async def official(ps, day: _dt.date, days: int = 450, as_of: _dt.datetime | Non
         from ohlcv_observation o
         join ohlcv_bar b on b.instrument_id = o.instrument_id and b.timeframe = o.timeframe
          and b.bar_start_utc = o.bar_start_utc and o.fetched_at > b.fetched_at
-        where o.timeframe = '1d' and o.classification = 'CA_ADJUSTMENT'
-          and o.instrument_key = any(:k)"""), {"k": ca_keys})).all()} if ca_keys else set()
+        where o.timeframe = :tf and o.classification = 'CA_ADJUSTMENT'
+          and o.instrument_key = any(:k)"""), {"k": ca_keys, "tf": tf})).all()} \
+        if ca_keys else set()
     df = df.merge(basis, on="payload", how="left")
     for c in COLS:
         df[c] = df[c].astype(float)
@@ -89,8 +101,95 @@ async def official(ps, day: _dt.date, days: int = 450, as_of: _dt.datetime | Non
     for c in ("open", "high", "low", "close"):
         df[c] = df[c] / df.net
     df["volume"] = df.volume * df.net
-    return df.drop(columns=["payload", "pb", "bas"]).sort_values(
-        ["instrument_key", "session_date"]).reset_index(drop=True)
+    return df.drop(columns=["payload", "pb", "bas"])
+
+
+def _copy_dir():
+    from drishti.core.config import get_settings
+    return get_settings().DRISHTI_DATA_DIR / "prajna_copy"
+
+
+def _intraday_copy(keys: list[str], tf: str, since: _dt.date) -> pd.DataFrame:
+    """Prajna's intraday history from the D1 copy (Parquet, one folder per month; every fetch is
+    kept, so the newest fetch per bar wins)."""
+    import pyarrow.parquet as pq
+    root = _copy_dir() / tf
+    parts = []
+    if root.is_dir():
+        for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name >= f"{since:%Y-%m}"):
+            for f in d.glob("part_*.parquet"):
+                t = pq.read_table(f, columns=["instrument_key", "session_date", "bar_start_utc",
+                                              "open", "high", "low", "close", "volume",
+                                              "payload_sha256", "fetched_at"],
+                                  filters=[("instrument_key", "in", keys)])
+                if t.num_rows:
+                    parts.append(t.to_pandas())
+    if not parts:
+        return pd.DataFrame()
+    x = pd.concat(parts, ignore_index=True)
+    x = x[x.session_date >= since].sort_values("fetched_at")
+    x = x.drop_duplicates(["instrument_key", "bar_start_utc"], keep="last")
+    return x.rename(columns={"bar_start_utc": "t", "payload_sha256": "payload"}).drop(
+        columns=["fetched_at"])
+
+
+def _intraday_own(keys: list[str], tf: str, since: _dt.date) -> pd.DataFrame:
+    """Drishti's own nightly intraday (data/intraday.py, top 500 + indices), for the sessions the
+    copy does not have (after the switch)."""
+    from drishti.data import intraday as own
+    root = own.root() / tf
+    out = []
+    if root.is_dir():
+        for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name >= str(since)):
+            x = own.read(tf, _dt.date.fromisoformat(d.name))
+            if not x.empty:
+                out.append(x[x.instrument_key.isin(keys)])
+    if not out:
+        return pd.DataFrame()
+    x = pd.concat(out, ignore_index=True)
+    x["session_date"] = x.bar_start_utc.dt.tz_convert(IST).dt.date
+    return x.rename(columns={"bar_start_utc": "t", "payload_sha256": "payload"})[
+        ["instrument_key", "session_date", "t", *COLS, "payload"]]
+
+
+async def intraday(ps, keys: list[str], tf: str, since: _dt.date,
+                   as_of: _dt.datetime | None = None, adjusted: bool = True) -> pd.DataFrame:
+    """Intraday history (15m / 1h / 1m) of `keys` from `since`, split/bonus adjusted. Columns:
+    instrument_key, session_date, t (bar start, UTC), OHLCV. The source follows
+    DRISHTI_HISTORY_SOURCE: prajna_live = Prajna's ohlcv_bar (newest fetch per bar, knowable
+    before as_of); copy = the D1 Parquet copy + Drishti's own nightly intraday for later days."""
+    from drishti.core.config import get_settings
+    as_of = as_of or _dt.datetime.now(tz=IST)
+    if not keys:
+        return pd.DataFrame(columns=["instrument_key", "session_date", "t", *COLS])
+    if get_settings().DRISHTI_HISTORY_SOURCE == "copy":
+        cp = _intraday_copy(keys, tf, since)
+        last = cp.session_date.max() if not cp.empty else since - _dt.timedelta(days=1)
+        own = _intraday_own(keys, tf, last + _dt.timedelta(days=1))
+        df = pd.concat([x for x in (cp, own) if not x.empty], ignore_index=True) \
+            if not (cp.empty and own.empty) else pd.DataFrame()
+    else:
+        rows = (await ps.execute(text("""select distinct on (instrument_key, bar_start_utc)
+            instrument_key, session_date, bar_start_utc, open, high, low, close, volume,
+            payload_sha256 from ohlcv_bar
+            where timeframe = :tf and session_date >= :d and instrument_key = any(:k)
+              and knowable_at < :a
+            order by instrument_key, bar_start_utc, fetched_at desc"""),
+            {"tf": tf, "d": since, "k": keys, "a": as_of})).all()
+        df = pd.DataFrame(rows, columns=["instrument_key", "session_date", "t", *COLS,
+                                         "payload"])
+    if df.empty:
+        return pd.DataFrame(columns=["instrument_key", "session_date", "t", *COLS])
+    df = df[~df.session_date.isin(SHORT_SESSIONS)]
+    df["t"] = pd.to_datetime(df.t, utc=True)
+    if adjusted:
+        df = await adjust(ps, df, as_of, tf)
+    else:
+        for c in COLS:
+            df[c] = df[c].astype(float)
+        df = df.drop(columns=["payload"])
+    return df.drop(columns=[c for c in ("net",) if c in df.columns]).sort_values(
+        ["instrument_key", "t"]).reset_index(drop=True)
 
 
 async def provisional(s, day: _dt.date) -> pd.DataFrame:

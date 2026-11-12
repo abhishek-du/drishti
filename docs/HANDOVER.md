@@ -62,8 +62,9 @@ A swing-first NSE system: chart reading, a daily watchlist, ML and **paper tradi
       - the flag `DRISHTI_HISTORY_SOURCE=copy` points every Prajna reader at the copy (read-only sessions);
       - `repoint verify`: `bars.official` on copy == live for 50 random + all CA stocks. The dry run (2026-09) gave 190 stocks, 0 mismatches.
 
-      **Still to do** (include CA adjustment of the intraday/15m read path: DEVIATIONS D5):
-      - the intraday readers on the Parquet copy + Drishti's own intraday;
+      - **Step 2 done 2026-11-12:** `bars.intraday` reads 15m/1h/1m from Prajna live, or from the Parquet copy + Drishti's own nightly intraday in copy mode, split/bonus adjusted (D5 closed). The chart and the scanner use it; copy == live tested on 2026-09.
+
+      **Still to do:**
       - the union with Drishti's own 1d ingest after the switch;
       - the remaining readers (`bars.py`, `bar_check`, `eod_quotes.universe_keys`, `run/p2.py`, the API) from Prajna's live DB to Drishti's tables, behind a flag.
    5. Vendor-applied detection for older CAs, once the copy brings Prajna's bars and observations.

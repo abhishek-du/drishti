@@ -285,3 +285,53 @@ def test_history_source_flag_points_the_prajna_engine_at_the_copy(monkeypatch):
         monkeypatch.delenv("DRISHTI_HISTORY_SOURCE", raising=False)
         config.get_settings.cache_clear()
         db.prajna_engine.cache_clear()
+
+
+def test_intraday_history_is_split_adjusted_and_the_copy_equals_live(tmp_path, monkeypatch):
+    """Re-point step 2 (2026-11-12): bars.intraday adjusts splits/bonuses point in time (D5) and
+    reads the same bars from the D1 Parquet copy as from Prajna's live DB."""
+    import asyncio
+    import datetime as dt
+    from pathlib import Path
+    import pytest
+    from drishti.core import config, db
+    from drishti.data import bars
+    dry = Path("/windows/drishti_data/prajna_copy_dryrun")
+    if not (dry / "15m").is_dir():
+        pytest.skip("no dry-run copy on this host")
+
+    async def go():
+        async with db.prajna_sessionmaker()() as ps:
+            k, ex = "NSE_EQ|INE338H01029", dt.date(2026, 11, 4)          # 1:2 split, ex 11-04
+            a = await bars.intraday(ps, [k], "15m", ex - dt.timedelta(days=6))
+            r = await bars.intraday(ps, [k], "15m", ex - dt.timedelta(days=6), adjusted=False)
+            m = a.merge(r, on="t", suffixes=("_a", "_r"))
+            pre, post = m[m.session_date_a < ex], m[m.session_date_a >= ex]
+            assert len(pre) > 0 and len(post) > 0
+            assert abs((pre.close_r / pre.close_a).median() - 2.0) < 1e-9
+            assert abs((post.close_r / post.close_a).median() - 1.0) < 1e-9
+            live = await bars.intraday(ps, ["NSE_EQ|INE002A01018", "NSE_EQ|INE009A01021"], "15m",
+                                       dt.date(2026, 9, 1), adjusted=False)
+        live = live[live.session_date <= dt.date(2026, 9, 30)].reset_index(drop=True)
+        await db.prajna_engine().dispose()
+        # the same read on the copy (drishti_test's prajna_copy schema + the dry-run Parquet)
+        (tmp_path / "prajna_copy").symlink_to(dry)
+        monkeypatch.setenv("DRISHTI_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("DRISHTI_HISTORY_SOURCE", "copy")
+        config.get_settings.cache_clear()
+        db.prajna_engine.cache_clear()
+        try:
+            async with db.prajna_sessionmaker()() as cp:
+                cpy = await bars.intraday(cp, ["NSE_EQ|INE002A01018", "NSE_EQ|INE009A01021"],
+                                          "15m", dt.date(2026, 9, 1), adjusted=False)
+            await db.prajna_engine().dispose()
+        finally:
+            config.get_settings.cache_clear()
+            db.prajna_engine.cache_clear()
+        cpy = cpy[cpy.session_date <= dt.date(2026, 9, 30)].reset_index(drop=True)
+        assert len(live) > 100 and len(live) == len(cpy)
+        for c in ("open", "high", "low", "close", "volume"):
+            assert (live[c].round(4) == cpy[c].round(4)).all(), c
+        assert (live.t == cpy.t).all()
+
+    asyncio.run(go())

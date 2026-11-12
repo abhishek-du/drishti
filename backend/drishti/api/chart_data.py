@@ -5,8 +5,9 @@
          bars (Parquet, then the live snapshot) for the days after Prajna's last session,
          aggregated on the 09:15 IST grid.
 1m, 5m   Prajna ohlcv_bar 1m for warm-up, then the recorded 1m bars and the live snapshot.
-Intraday bars are as the vendor served them: NOT split/bonus adjusted. The recorder starts at
-09:21 before the switch, so its first 15m/1h bar of a day is partial.
+Intraday history is split/bonus adjusted point in time (bars.intraday, 2026-11-12; DEVIATIONS D5
+closed); today's recorder bars need no adjustment. The recorder starts at 09:21 before the
+switch, so its first 15m/1h bar of a day is partial.
 """
 
 from __future__ import annotations
@@ -198,12 +199,12 @@ def sources(df: pd.DataFrame, names: dict[str, str]) -> list[dict]:
 
 
 async def _prajna(ps, key: str, tf: str, n_sessions: int) -> pd.DataFrame:
+    """Prajna's intraday history of `key` (bars.intraday: split/bonus adjusted point in time,
+    from Prajna's live DB or the D1 copy per DRISHTI_HISTORY_SOURCE)."""
     d0 = today() - _dt.timedelta(days=int(n_sessions * 1.5) + 7)
-    rows = (await ps.execute(text("""
-        select distinct on (bar_start_utc) extract(epoch from bar_start_utc)::bigint,
-               open, high, low, close, volume, null
-        from ohlcv_bar where instrument_key = :k and timeframe = :tf and session_date > :d0
-        order by bar_start_utc, fetched_at desc"""), {"k": key, "tf": tf, "d0": d0})).all()
+    x = await bars.intraday(ps, [key], tf, d0 + _dt.timedelta(days=1))
+    rows = [(int(t.timestamp()), o, h, lo, c, v, None) for t, o, h, lo, c, v in
+            zip(x.t, x.open, x.high, x.low, x.close, x.volume)]
     df = _frame(rows, "prajna")
     df = df[~df.session_date.isin(SHORT_SESSIONS)]
     keep = sorted(df.session_date.unique())[-n_sessions:]

@@ -125,3 +125,9 @@ The user accepted in writing that **there is no full backup of the `prajna` data
 - `pf_order`, `pf_fill`, `pf_trade`, `pf_equity` and `pf_decision` are append-only (trigger `drishti_append_only`).
 - A paper order is decided and filled (or rejected) in one step from known bars, so each `pf_order` row is written once, with its final status. It is never updated.
 - **PAPER ONLY:** the paper trader writes only `pf_*` tables; no code path places a real order.
+
+**D5 closed 2026-11-12:**
+- Intraday history is now split/bonus adjusted point in time: `bars.intraday` → `bars.adjust`, the same rule as the daily bars.
+- It is used by the chart's 15m/1h/1m history and the scanner's `bars15`.
+- Checked on a 1:2 split (ex 2026-11-04): the raw/adjusted ratio is exactly 2.0 before the ex-date and 1.0 after it.
+- Today's recorder bars need no adjustment.
