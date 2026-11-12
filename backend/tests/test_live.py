@@ -134,3 +134,64 @@ def test_tick_files_survive_a_killed_writer(tmp_path):
     assert [f.name for f in files] == ["ticks_1200.zst", "ticks_1200_a.zst"]
     got = [d for f in files for _, d in store.read_frames(f)]
     assert got == msgs                                # nothing lost, nothing corrupt
+
+
+def test_live_candles_for_15m_1h_and_today_daily(tmp_path, monkeypatch):
+    """User 2026-11-12: every chart timeframe live within ~1 s (WebSocket candles)."""
+    import json
+    from urllib.parse import quote
+    from drishti.api import app as A, chart_data
+    monkeypatch.setattr(A, "LIVE_DIR", tmp_path)
+    monkeypatch.setattr(chart_data, "LIVE_DIR", tmp_path)
+    monkeypatch.setattr(chart_data, "bars_1m_dir", lambda: tmp_path / "none")
+    key = "NSE_EQ|TLIVE"
+    ist = lambda h, m: int(_dt.datetime(2026, 11, 12, h, m, tzinfo=IST).timestamp())  # noqa
+    c1 = [{"time": ist(9, 15) + 60 * i, "open": 100 + i, "high": 101 + i, "low": 99 + i,
+           "close": 100.5 + i, "volume": 10, "vwap": None} for i in range(75)]   # 09:15-10:29
+    (tmp_path / "c1m").mkdir()
+    (tmp_path / "c1m" / f"{quote(key, safe='')}.json").write_text(json.dumps(c1))
+    (tmp_path / "day0.json").write_text(json.dumps({key: {"date": "2026-11-12", "open": 98.0,
+        "high": 120.0, "low": 95.0, "close": 99, "volume": 500, "seen_at": 0}}))
+    c15 = A._live_candles(key, 15)
+    assert [c["time"] for c in c15][:2] == [ist(9, 15), ist(9, 30)] and len(c15) == 5
+    assert c15[0]["volume"] == 150 and c15[0]["high"] == 115 and c15[0]["close"] == 114.5
+    c60 = A._live_candles(key, 60)
+    assert [c["time"] for c in c60] == [ist(9, 15), ist(10, 15)]                # NSE hours
+    d = A._live_candles(key, 1440)
+    assert d[0]["time"] == ist(0, 0) and (d[0]["open"], d[0]["high"], d[0]["low"]) == (98.0, 175, 95.0)
+    assert d[0]["close"] == 174.5
+    from fastapi.testclient import TestClient
+    cl = TestClient(A.app)
+    assert cl.get(f"/api/live/candles?key={quote(key)}&tf=15").json()["candles"][0]["time"] == ist(9, 15)
+    assert cl.get(f"/api/live/candles?key={quote(key)}&tf=7").status_code == 400
+    assert (tmp_path / "want" / quote(key, safe="")).exists()                  # asked the recorder
+
+
+def test_recorder_writes_live_json_for_wanted_keys(tmp_path, monkeypatch):
+    import os
+    import time
+    from urllib.parse import quote
+    monkeypatch.setattr(recorder, "LIVE_DIR", tmp_path)
+    monkeypatch.setattr(recorder, "HEALTH", tmp_path / "h.json")
+    monkeypatch.setenv("DRISHTI_DATA_DIR", str(tmp_path / "data"))
+    from drishti.core import config
+    config.get_settings.cache_clear()
+    try:
+        rec = recorder.Recorder(["NSE_EQ|K", "NSE_EQ|R"], _dt.datetime(2099, 1, 1, tzinfo=IST),
+                                live_keys={"NSE_EQ|K"})
+        rec.on_frame(_frame("NSE_EQ|R", 50, T0, 1000, 50.1))
+        rec.snapshot()
+        assert not (tmp_path / "c1m" / quote("NSE_EQ|R", safe="")).with_suffix(".json").exists()
+        (tmp_path / "want").mkdir()
+        (tmp_path / "want" / quote("NSE_EQ|R", safe="")).touch()
+        rec._wanted_at = 0.0
+        rec.snapshot()                                   # newly wanted: written at once
+        assert (tmp_path / "c1m" / f"{quote('NSE_EQ|R', safe='')}.json").exists()
+        old = time.time() - 300                          # a stale want file stops it
+        os.utime(tmp_path / "want" / quote("NSE_EQ|R", safe=""), (old, old))
+        rec._wanted_at = 0.0
+        rec.snapshot()
+        assert rec._wanted == set()
+        rec.ticks.close()
+    finally:
+        config.get_settings.cache_clear()

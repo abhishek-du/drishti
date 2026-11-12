@@ -34,7 +34,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 from sqlalchemy import text
@@ -92,6 +92,8 @@ class Recorder:
         self.live_keys = None if live_keys is None else set(live_keys)   # None = every key
         self.day0: dict[str, dict] = {}
         self._day0_dirty = False
+        self._wanted: set[str] = set()       # keys a chart has open (want files, < 2 min old)
+        self._wanted_at = 0.0
         self.ticks = store.TickWriter(cfg.DRISHTI_DATA_DIR / "ticks")
         self.bars_root = cfg.DRISHTI_DATA_DIR / "bars_1m"
         self.b = Builder()
@@ -125,11 +127,31 @@ class Recorder:
                                                 "keys": {k: v for k, v in self.b.summary().items()
                                                          if self.live_keys is None
                                                          or k in self.live_keys}})
-        for k in (self._changed if self.live_keys is None else self._changed & self.live_keys):
+        self._refresh_wanted()
+        live = None if self.live_keys is None else self.live_keys | self._wanted
+        for k in (self._changed if live is None else self._changed & live):
             _write_json(LIVE_DIR / "c1m" / f"{quote(k, safe='')}.json", self.b.candles(k, 1))
         self._changed.clear()
         if self._day0_dirty:
             self.write_day0()
+
+    def _refresh_wanted(self) -> None:
+        """Every 2 s: the subscribed keys whose want file (touched by the API while a chart has
+        the key open) is under 2 minutes old get live 1m JSON too; a newly wanted key is
+        written at once."""
+        if self.live_keys is None or time.monotonic() - self._wanted_at < 2.0:
+            return
+        self._wanted_at = time.monotonic()
+        cut, now_keys = time.time() - 120, set()
+        try:
+            for f in (LIVE_DIR / "want").iterdir():
+                if f.stat().st_mtime >= cut:
+                    now_keys.add(unquote(f.name))
+        except OSError:
+            pass
+        now_keys &= set(self.b.keys)
+        self._changed |= now_keys - self._wanted - self.live_keys
+        self._wanted = now_keys
 
     def write_day0(self) -> None:
         """The day's OHLC at the first tick of each key (Live Radar: the 09:15 to first-tick

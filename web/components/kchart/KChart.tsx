@@ -13,7 +13,9 @@ import SymbolSearch from "./SymbolSearch";
 
 export type Tf = "1m" | "5m" | "15m" | "1h" | "1d";
 export const TFS: Tf[] = ["1m", "5m", "15m", "1h", "1d"];
-export const isLive = (tf: Tf) => tf === "1m" || tf === "5m";
+export const isLive = (tf: Tf) => tf in LIVE_MIN;
+/** WebSocket candle size per timeframe, in minutes (1440 = today's daily candle). */
+export const LIVE_MIN: Record<Tf, number> = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "1d": 1440 };
 type Pt = { time: string | number; value: number };
 export type BarsData = {
   key: string; tf: Tf; label: string | null; adjusted: boolean; heikin_ashi: boolean;
@@ -273,10 +275,14 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
   }, [d, indKey, indTick]);
   useEffect(() => { if (ready) lsSet(LS.ind, inds); }, [indKey, ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // live 1m/5m: candles from the WebSocket every second (no page refresh); indicator values
-  // refresh every 10 s. Heikin Ashi candles come from the API, so they refresh every 10 s instead.
+  // live, every timeframe: candles from the WebSocket within ~1 s of a tick (no page refresh);
+  // indicator values refresh every 10 s. Heikin Ashi candles come from the API, so they refresh
+  // every 10 s instead. 1m/5m: the live candle replaces the bar. 15m/1h/1d: the live candle is
+  // built only from the minutes the recorder saw, so it is MERGED into the stored bar of the same
+  // time (open kept, high/low widened, close and volume from live).
   useEffect(() => {
     if (!d || !isLive(d.tf)) return;
+    const merge = d.tf === "15m" || d.tf === "1h" || d.tf === "1d";
     const close = d.heikin_ashi ? () => {} : openLive((msg) => {
       const lastT = bars.current.length ? bars.current[bars.current.length - 1].timestamp : 0;
       const fresh = (msg.candles ?? []).filter((x: LiveCandle) => x.time * 1000 >= lastT);
@@ -292,14 +298,17 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
         } as any;
         const last = bars.current[bars.current.length - 1];
         if (last && last.timestamp === k.timestamp) {
-          bars.current[bars.current.length - 1] = k;
+          const m = merge ? { ...k, open: last.open, high: Math.max(last.high, k.high), low: Math.min(last.low, k.low),
+            volume: Math.max(last.volume ?? 0, k.volume ?? 0) } : k;
+          bars.current[bars.current.length - 1] = m;
+          liveCb.current?.(m);
         } else if (!last || k.timestamp > last.timestamp) {
           bars.current.push(k);
+          liveCb.current?.(k);
         }
-        liveCb.current?.(k);
       });
       if (fresh.length) setTick((t) => t + 1);
-    }, d.key, d.tf === "5m" ? 5 : 1);
+    }, d.key, LIVE_MIN[d.tf]);
     const iv = setInterval(() => { if (d.heikin_ashi) load(); else setIndTick((t) => t + 1); }, 10000);
     return () => { close(); clearInterval(iv); };
   }, [d, load]);
@@ -308,7 +317,7 @@ export default function KChart({ instrumentKey, tf, setTf, onData, levels }: {
   // bars are re-fetched every 60 s and only the newest candles are updated or appended (no reset:
   // zoom, scroll and drawings stay). User request 2026-11-12.
   useEffect(() => {
-    if (!d || isLive(d.tf)) return;
+    if (!d || d.tf === "1m" || d.tf === "5m") return;   // backup for 15m/1h/1d if the socket is quiet
     const marketOpen = () => {
       const p = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
       const g = (t: string) => p.find((x) => x.type === t)?.value ?? "";

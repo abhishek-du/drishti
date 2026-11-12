@@ -169,6 +169,34 @@ def _live_summary() -> dict:
         return {"label": LIVE_LABEL, "updated_at": None, "keys": {}}
 
 
+LIVE_TFS = (1, 5, 15, 60, 1440)     # minutes; 1440 = today's daily candle
+
+
+def _want(key: str | None) -> None:
+    """Ask the recorder to write this key's live 1m candles (a chart has it open). The recorder
+    writes them for the watchlist + indices anyway; any other subscribed key (the Live Radar
+    universe) only while a chart keeps asking (want file touched in the last 2 minutes)."""
+    if not key:
+        return
+    try:
+        d = LIVE_DIR / "want"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / quote(key, safe="")).touch()
+    except OSError:
+        pass
+
+
+def _bucket(t: int, tf: int) -> int:
+    """Bar start (epoch s) of a 1m candle at `t` for a tf in minutes. NSE bars start at 09:15
+    IST: 1m/5m/15m buckets are plain multiples (09:15 is one); 1h buckets start at :15 IST
+    (= :45 UTC); the daily bar starts at IST midnight (the 1d chart's timestamps)."""
+    if tf == 1440:
+        return (t + 19800) // 86400 * 86400 - 19800
+    if tf == 60:
+        return (t - 2700) // 3600 * 3600 + 2700
+    return t // (tf * 60) * tf * 60
+
+
 def _live_candles(key: str, tf: int) -> list[dict]:
     try:
         c1 = json.loads((LIVE_DIR / "c1m" / f"{quote(key, safe='')}.json").read_text())
@@ -176,9 +204,18 @@ def _live_candles(key: str, tf: int) -> list[dict]:
         return []
     if tf == 1:
         return c1
+    if tf == 1440:                        # today's daily candle: day OHLC incl. pre-recorder part
+        if not c1:
+            return []
+        from drishti.api.chart_data import today_ohlc
+        t0 = _bucket(c1[-1]["time"], 1440)
+        day = _dt.datetime.fromtimestamp(t0 + 19800, _dt.timezone.utc).date()
+        o = today_ohlc(key, day, float(c1[-1]["close"]))
+        return [{"time": t0, "open": o["open"], "high": o["high"], "low": o["low"],
+                 "close": o["close"], "volume": o["volume"], "vwap": c1[-1].get("vwap")}]
     out: dict[int, dict] = {}
     for b in c1:
-        t = b["time"] // (tf * 60) * tf * 60
+        t = _bucket(b["time"], tf)
         x = out.get(t)
         if x is None:
             out[t] = dict(b, time=t)
@@ -194,7 +231,10 @@ async def live_summary() -> dict:
 
 
 @app.get("/api/live/candles")
-async def live_candles(key: str, tf: int = Query(1, ge=1, le=5)) -> dict:
+async def live_candles(key: str, tf: int = Query(1, ge=1, le=1440)) -> dict:
+    if tf not in LIVE_TFS:
+        raise HTTPException(400, f"tf must be one of {LIVE_TFS} (minutes)")
+    _want(key)
     return {"label": LIVE_LABEL, "key": key, "tf": tf, "candles": _live_candles(key, tf)}
 
 
@@ -214,12 +254,15 @@ async def live_ws(ws: WebSocket, key: str | None = None, tf: int = 1):
     changes (checked every 200 ms), and at least every 2 s as a heartbeat. Read only; nothing
     is accepted from the client. Same message format as before."""
     await ws.accept()
-    tf = 5 if tf == 5 else 1
-    seen, last = None, 0.0
+    tf = tf if tf in LIVE_TFS else 1
+    seen, last, wanted = None, 0.0, 0.0
     try:
         while True:
             cur = _live_mtimes(key)
             t = asyncio.get_running_loop().time()
+            if t - wanted >= 30.0:                    # keep the recorder writing this key
+                _want(key)
+                wanted = t
             if cur != seen or t - last >= 2.0:
                 msg = {"label": LIVE_LABEL, "summary": _live_summary()}
                 if key:
