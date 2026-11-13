@@ -30,6 +30,7 @@ from sqlalchemy import text
 from drishti.core.clock import IST
 from drishti.core.config import get_settings
 from drishti.scanner.detect import choose_target
+from drishti.scanner import notify_ai
 
 log = logging.getLogger("drishti.scanner.notify")
 
@@ -57,7 +58,7 @@ CAVEAT_15M = ("15m levels use unadjusted 15m bars (DEVIATIONS D5): unreliable fo
 _state = {"last": 0.0, "sent": 0}
 
 
-def send(msg: str) -> str:
+def send(msg: str, parse_mode: str = "HTML") -> str:
     """'sent' | 'logged' (no credentials) | 'failed ...'."""
     cfg = get_settings()
     if not (cfg.DRISHTI_TELEGRAM_BOT_TOKEN and cfg.DRISHTI_TELEGRAM_CHAT_ID):
@@ -67,14 +68,27 @@ def send(msg: str) -> str:
     if wait > 0:
         time.sleep(wait)
     url = f"https://api.telegram.org/bot{cfg.DRISHTI_TELEGRAM_BOT_TOKEN}/sendMessage"
-    body = {"chat_id": cfg.DRISHTI_TELEGRAM_CHAT_ID, "text": msg[:4000],
-            "disable_web_page_preview": True}
+    body = {
+        "chat_id": cfg.DRISHTI_TELEGRAM_CHAT_ID,
+        "text": msg[:4000],
+        "parse_mode": parse_mode,
+        "disable_web_page_preview": True,
+    }
     try:
         for attempt in (1, 2):
             r = httpx.post(url, json=body, timeout=20)
             _state["last"] = time.monotonic()
             if r.status_code == 200:
                 return "sent"
+            if r.status_code == 400 and parse_mode:
+                # If Telegram HTML parsing fails, fallback immediately to plain text
+                log.warning("telegram HTML parse error; retrying plain text: %s", r.text)
+                body.pop("parse_mode", None)
+                r_plain = httpx.post(url, json=body, timeout=20)
+                _state["last"] = time.monotonic()
+                if r_plain.status_code == 200:
+                    return "sent"
+                return f"failed HTTP {r_plain.status_code}"
             if r.status_code == 429 and attempt == 1:  # flood control: wait as told, once
                 try:
                     wait_s = float((r.json().get("parameters") or {}).get("retry_after") or 5)
@@ -144,72 +158,11 @@ def _ist(t) -> str:
 # ---- message texts ------------------------------------------------------------------------
 
 def alert_text(a: dict, odds: dict | None) -> str:
-    e, st = float(a["entry_ref"]), float(a["stop"])
-    ct = choose_target(e, st, a["r1"], a["r2"], a["qty"] or 0)
-    risk = e - st
-    gross = (ct["target"] - e) / risk
-    ctx = a.get("context") or {}
-    tgt = {"R1": "R1", "R2": "R2 (R1 not actionable)", "2R": "2R"}[ct["target_basis"]]
-    if ct["target_basis"] == "2R" and a["r1"] is not None:
-        tgt = "2R (R1 not actionable)"
-    lines = [f"ALERT · {a['symbol'] or a['instrument_key']} · {a['detector']} [{a['tf']}]"
-             + (" · Live Radar name" if ctx.get("source") == "radar" else ""),
-             f"Bar {a['session_date']} {_ist(a['bar_time'])} IST" if a["tf"] == "15m"
-             else f"Session {a['session_date']} (EOD)",
-             f"Entry (ref) {_f(e)} · Stop {_f(st)} · Target {_f(ct['target'])} {tgt}",
-             f"Risk/share {_f(risk)} · R:R gross {gross:.2f} · NET {_f(ct['net_rr_target'])}"
-             f" · qty {a['qty']}"]
-    if ct["tags"]:
-        lines.append(f"Tag: {ct['tags'][0]} (R1 {_f(a['r1'])}: net R at R1 "
-                     f"{_f(ct['net_r_at_r1'])}) — R1 kept only as a reference level")
-    if a["tf"] == "15m":
-        lines.append("Odds: pending (15m engine)")
-    elif odds:
-        geo = "geometry negative" if (odds.get("mc_avg_r_net") or 0) < 0 else "geometry positive"
-        thin = " · thin sample" if odds.get("thin_sample") else ""
-        lines.append(f"History: target-first ~{float(odds['mc_target_first']):.0%}, avg net R "
-                     f"{float(odds['mc_avg_r_net']):+.2f}, {geo} (break-even "
-                     f"{float(odds['breakeven']):.0%}){thin}")
-    else:
-        lines.append("Odds: not scored yet")
-    off = [n for n, v in (("regime", ctx.get("regime")), ("spec gate", ctx.get("spec_gate")))
-           if v == "OFF"]
-    if off:
-        lines.append(f"Note: {' and '.join(off)} OFF")
-    if a["tf"] == "15m":
-        lines.append(CAVEAT_15M)
-    lines += ["", LABEL]
-    return "\n".join(lines)
+    return notify_ai.format_alert_ai(a, odds)
 
 
 def outcome_text(a: dict, o: dict, took: dict | None, marked: str | None) -> str:
-    name = f"{a['symbol'] or a['instrument_key']} {a['detector']} [{a['tf']}]"
-    when = (f"{_ist(o['exit_bar'])}–{_ist(o['exit_bar'] + _dt.timedelta(minutes=15))} IST bar"
-            if a["tf"] == "15m" and o.get("exit_bar") else
-            f"on {o['exit_bar'].astimezone(IST).date()}" if o.get("exit_bar") else "")
-    tgt, st = _f(o.get("target_used")), _f(a["stop"])
-    k = o["outcome"]
-    if k == "R1":
-        what = f"target {tgt} reached {when} (net R {_f(o['r_net'])})"
-    elif k == "STOP":
-        what = f"stop {st} hit {when}, exit {_f(o['exit_price'])} (net R {_f(o['r_net'])})"
-    elif k == "TIMEOUT":
-        what = (f"expired, neither hit, closed {_f(o['exit_price'])} {when} "
-                f"(net R {_f(o['r_net'])})"
-                + (" — flat by 15:20" if a["tf"] == "15m" else ""))
-    else:
-        what = (f"expired, entry {_f(a['entry_ref'])} not triggered "
-                f"{'in the next 15m bar' if a['tf'] == '15m' else 'on the next session'}"
-                " (no trade)")
-    lines = [f"OUTCOME · {name} · alert #{a['id']} ({a['session_date']})", what]
-    if marked:
-        lines.append(f"Your marked trade ({marked})"
-                     + (f": your entry {_f(took['entry_used'])}, {took['outcome']}, net R "
-                        f"{_f(took['r_net'])}" if took and took.get("r_net") is not None else ""))
-    if a["tf"] == "15m":
-        lines.append(CAVEAT_15M)
-    lines += ["", LABEL]
-    return "\n".join(lines)
+    return notify_ai.format_outcome_ai(a, o, took, marked)
 
 
 # ---- delivery passes ----------------------------------------------------------------------
@@ -295,14 +248,8 @@ async def deliver_alerts(s, tf: str | None = None, odds_wait_min: int = 40) -> d
         out[st] = out.get(st, 0) + 1
     for bt, al in groups.items():
         ref = f"digest15:{bt.astimezone(IST):%Y-%m-%dT%H:%M}"
-        lines = [f"15m ALERTS DIGEST · {bt.astimezone(IST):%Y-%m-%d} · "
-                 f"{_ist(bt)}–{_ist(bt + _dt.timedelta(minutes=15))} IST bar · {len(al)} new"]
-        lines += [digest_line(a) for a in al[:40]]
-        if len(al) > 40:
-            lines.append(f"... and {len(al) - 40} more (Scanner page)")
-        lines += ["Targets after the broken-R1 rule; odds pending (15m engine).", CAVEAT_15M,
-                  "", LABEL]
-        st = await deliver(s, "DIGEST_15M", ref, "\n".join(lines))
+        body = notify_ai.format_digest_15m_ai(bt, al)
+        st = await deliver(s, "DIGEST_15M", ref, body)
         if st in ("sent", "logged", "dup"):
             await _mark(s, "ALERT", [a["id"] for a in al], ref)
         out[f"digest_{st}"] = out.get(f"digest_{st}", 0) + 1
@@ -383,32 +330,8 @@ async def deliver_outcomes_15m(s, day: _dt.date) -> str:
                                                                     "NO_FILL")}
     filled = [float(r["r_net"]) for r in rows if r["outcome"] != "NO_FILL"
               and r["r_net"] is not None]
-    lines = [f"15m OUTCOMES · {day} (MIS rule: flat by 15:20, exit at the 15:00–15:15 bar "
-             f"close) · {len(rows)} alerts",
-             f"Target reached {cnt['R1']} · stop hit {cnt['STOP']} · expired {cnt['TIMEOUT']}"
-             f" · not triggered {cnt['NO_FILL']}" + (f" · unresolved {open_n}" if open_n else ""),
-             f"Filled {len(filled)}: total {sum(filled):+.2f} R, average "
-             f"{(sum(filled) / len(filled)) if filled else 0:+.2f} R net"]
-    for det in sorted({r["detector"] for r in rows}):
-        d = [float(r["r_net"]) for r in rows if r["detector"] == det
-             and r["outcome"] != "NO_FILL" and r["r_net"] is not None]
-        lines.append(f"  {det}: {len(d)} filled, {sum(d):+.2f} R")
-    lines.append("")
-    done = [r for r in rows if r["outcome"] != "NO_FILL"]
-    lines += [f"{r['symbol'] or r['instrument_key']} {r['detector']}: {_outcome_word(r)}"
-              for r in done[:30]]
-    if len(done) > 30:
-        lines.append(f"... and {len(done) - 30} more (Journal page)")
-    nf = sorted({r["symbol"] or r["instrument_key"] for r in rows if r["outcome"] == "NO_FILL"})
-    if nf:
-        lines.append(f"15m entry not triggered ({cnt['NO_FILL']}): " + ", ".join(nf[:40])
-                     + (" …" if len(nf) > 40 else ""))
-    if swing_nf:
-        lines.append(f"Swing (1d) entry not triggered ({len(swing_nf)}): "
-                     + ", ".join(f"{r['symbol'] or r['instrument_key']} ({r['session_date']:%d-%m})"
-                                 for r in swing_nf[:30]) + (" …" if len(swing_nf) > 30 else ""))
-    lines += ["", "A day of outcomes is noise, not evidence of an edge.", CAVEAT_15M, "", LABEL]
-    st = await deliver(s, "OUTCOME_15M", ref, "\n".join(lines))
+    body = notify_ai.format_outcomes_15m_ai(day, rows, swing_nf, open_n, cnt, filled)
+    st = await deliver(s, "OUTCOME_15M", ref, body)
     if st in ("sent", "logged", "dup"):
         await _mark(s, "OUTCOME", [r["id"] for r in rows + swing_nf], ref)
     return st
@@ -425,27 +348,11 @@ async def deliver_scout(s, day: _dt.date, top_n: int = 10) -> str:
         from watchlist_event where run_id = :r and event <> 'DROPPED' order by rank"""),
         {"r": run["run_id"]})).mappings().all()
     c, reg = run["counts"] or {}, run["regime"] or {}
-    lines = [f"SCOUT WATCHLIST · {day}: {len(rows)} stocks (added {c.get('added', '-')}, "
-             f"dropped {c.get('dropped', '-')})",
-             "Every listed stock passed all of: trend (close > SMA50 > SMA200, SMA200 rising), "
-             "RS top 25 %, beats Nifty 500 over 3 months, within 15 % of the 52-week high, "
-             "ATR 2–6 %, no 2/5 % price band.", f"Top {min(top_n, len(rows))} by RS:"]
-    for r in rows[:top_n]:
-        m = r["metrics"] or {}
-        res = " · results ahead" if (r["flags"] or {}).get("results_meeting") else ""
-        lines.append(f"{r['rank']}. {r['symbol'] or r['instrument_key']} — RS "
-                     f"{_f(r['rs_score'])}, {_f(m.get('dist_52w_high_pct'), 1)} % below the 52w "
-                     f"high, ATR {_f((m.get('atr_pct') or 0) * 100, 1)} %{res}")
-    off = [n for n, v in (("regime", reg.get("status")), ("spec gate", reg.get("spec_gate")))
-           if v == "OFF"]
-    if off:
-        lines.append(f"Note: {' and '.join(off)} OFF")
-    lines += ["", "A watchlist is context, not a signal.", LABEL]
-    return await deliver(s, "SCOUT_DIGEST", f"scout:{day}", "\n".join(lines))
+    body = notify_ai.format_scout_ai(day, rows, c, reg, top_n)
+    return await deliver(s, "SCOUT_DIGEST", f"scout:{day}", body)
 
 
 async def deliver_radar(s, day: _dt.date) -> dict:
-    from drishti.scanner.radar import CAVEAT, LABEL as RL
     if day < NOTIFY_SINCE:
         return {}
     rows = (await s.execute(text(f"""select r.* from radar_event r where r.session_date = :d
@@ -454,15 +361,7 @@ async def deliver_radar(s, day: _dt.date) -> dict:
         {"d": day})).mappings().all()
     out: dict = {}
     for r in rows:
-        m = r["metrics"] or {}
-        body = "\n".join([
-            f"LIVE RADAR · {r['symbol'] or r['instrument_key']} newly meets Scout's criteria",
-            f"Time: the {_ist(r['bar_time'])}–{_ist(r['bar_time'] + _dt.timedelta(minutes=15))} "
-            "IST bar",
-            "Flipped since T-1: " + ", ".join(r["reason"]),
-            f"Close {_f(m.get('close'))} · RS {_f(m.get('rs_score'))} (cut {_f(m.get('rs_cut'))})"
-            f" · {_f(m.get('dist_52w_high_pct'), 1)} % below the 52w high",
-            "", RL, CAVEAT, LABEL])
+        body = notify_ai.format_radar_ai(r)
         st = await deliver(s, "RADAR_NEW", f"radar:{r['id']}", body)
         out[st] = out.get(st, 0) + 1
     return out

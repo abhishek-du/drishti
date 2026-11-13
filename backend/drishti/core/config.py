@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # Telegram (optional): without both, notifications are only logged. Never printed.
     DRISHTI_TELEGRAM_BOT_TOKEN: str = ""
     DRISHTI_TELEGRAM_CHAT_ID: str = ""
+    # Amazon Bedrock AI configuration (inherited from Prajna / .env)
+    BEDROCK_REGION: str = "us-east-1"
+    BEDROCK_MODEL_ID: str = "amazon.nova-pro-v1:0"
+    AWS_BEARER_TOKEN_BEDROCK: str = ""
 
 
 OWN_TOKEN_FILE = BACKEND / "var" / "upstox_token.json"

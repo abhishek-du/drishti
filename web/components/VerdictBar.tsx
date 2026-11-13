@@ -20,7 +20,7 @@ export function marketOpen(): boolean {
 
 export default function VerdictBar({ instrumentKey, tf }: { instrumentKey: string; tf: string }) {
   const [r, setR] = useState<R | null>(null);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     let stop = false;
     const load = () => get<R>(`/api/analysis/now?key=${encodeURIComponent(instrumentKey)}`)
@@ -33,24 +33,34 @@ export default function VerdictBar({ instrumentKey, tf }: { instrumentKey: strin
   const v = r.verdicts[tf] ?? r.verdicts["1d"];
   const t = new Date(r.as_of).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit" });
   return (
-    <div className="card" style={{ marginBottom: 8, padding: "8px 12px" }}>
-      <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <b className="small">Rule verdict · {tf}</b>
-        <span className={`pill ${TONE[v.tone]}`} style={{ fontWeight: 700 }}>{v.tag}</span>
+    <div className="card" style={{ marginBottom: 8, padding: "10px 12px" }}>
+      <div className="row" style={{ gap: 6, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+        <div className="row" style={{ gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <b className="small">Rule verdict · {tf}</b>
+          <span className={`pill ${TONE[v.tone]}`} style={{ fontWeight: 700, fontSize: 11.5 }}>{v.tag}</span>
+        </div>
+        <button className="btn small" onClick={() => setOpen(!open)} style={{ cursor: "pointer", fontSize: 11 }}>
+          {open ? "▲ less" : "▼ more"}
+        </button>
+      </div>
+      <div className="row" style={{ gap: 4, flexWrap: "wrap", margin: "6px 0 4px" }}>
         {(["1d", "15m", "5m", "1m"] as const).filter((x) => x !== tf).map((x) => (
-          <span key={x} className={`pill ${TONE[r.verdicts[x].tone]}`} style={{ fontSize: 11, opacity: 0.8 }}>{x}: {r.verdicts[x].tag}</span>
+          <span key={x} className={`pill ${TONE[r.verdicts[x].tone]}`} style={{ fontSize: 10, opacity: 0.85, padding: "1px 6px" }}>
+            {x}: {r.verdicts[x].tag}
+          </span>
         ))}
-        <span className="muted small" style={{ marginLeft: "auto" }}>LTP {r.price.ltp ?? "–"} · {t} IST{marketOpen() ? " · live, every 10 s" : ""}</span>
-        <button className="btn small" onClick={() => setOpen(!open)}>{open ? "less" : "more"}</button>
+      </div>
+      <div className="muted small" style={{ fontSize: 11, margin: "2px 0 0" }}>
+        LTP {r.price.ltp ?? "–"} · {t} IST{marketOpen() ? " · live" : ""}
       </div>
       {open && (
-        <div className="small" style={{ marginTop: 6 }}>
-          <ul style={{ margin: "2px 0 4px 18px" }}>{v.reasons.map((x) => <li key={x}>{x}</li>)}</ul>
-          {v.plan && <div className="muted">Plan: {v.plan}</div>}
+        <div className="small" style={{ marginTop: 8, borderTop: "1px solid var(--line)", paddingTop: 6 }}>
+          <ul style={{ margin: "2px 0 4px 16px", padding: 0 }}>{v.reasons.map((x) => <li key={x} style={{ marginBottom: 2 }}>{x}</li>)}</ul>
+          {v.plan && <div className="muted" style={{ margin: "4px 0" }}>Plan: {v.plan}</div>}
           {v.time_machine.length > 0 && (
-            <ul style={{ margin: "4px 0 0 18px" }}>{v.time_machine.map((x) => <li key={x}>{x}</li>)}</ul>
+            <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>{v.time_machine.map((x) => <li key={x} style={{ marginBottom: 2 }}>{x}</li>)}</ul>
           )}
-          <div className="muted" style={{ marginTop: 4 }}>{r.verdicts.note}</div>
+          <div className="muted" style={{ marginTop: 4, fontSize: 10.5 }}>{r.verdicts.note}</div>
         </div>
       )}
     </div>
